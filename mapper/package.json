@@ -22,10 +22,20 @@
     ],
     "commands": [
       {
-        "command": "mapper.helloWorld",
-        "title": "Hello World"
+        "command": "mapper.setGeminiKey",
+        "title": "Mapper: Set Gemini API Key"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "@mapper",
+      "properties": {
+        "mapper.useUserKey": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to use your own Gemini API key for mapping."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

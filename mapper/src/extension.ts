@@ -1,27 +1,47 @@
 import * as vscode from 'vscode';
-// We'll use these for Day 2 logic
-// import { ChatOpenAI } from "@langchain/openai"; 
 
-export function activate(context: vscode.ExtensionContext) {
-    // Register the @mapper agent
+export async function activate(context: vscode.ExtensionContext) {
+    
+    // Helper function to securely get or ask for the API Key
+    async function getApiKey(): Promise<string | undefined> {
+        // 1. Try to get the key from SecretStorage
+        let apiKey = await context.secrets.get('gemini_api_key');
+
+        if (!apiKey) {
+            // 2. If missing, ask the user
+            apiKey = await vscode.window.showInputBox({
+                prompt: "Enter your Gemini API Key to enable @mapper",
+                placeHolder: "AIzaSy...",
+                ignoreFocusOut: true,
+                password: true // Hides the key as they type
+            });
+
+            if (apiKey) {
+                // 3. Save it securely for next time
+                await context.secrets.store('gemini_api_key', apiKey);
+                vscode.window.showInformationMessage("✅ Gemini Key saved securely.");
+            }
+        }
+        return apiKey;
+    }
+
+    // Register a command so users can update their key later
+    context.subscriptions.push(
+        vscode.commands.registerCommand('mapper.setGeminiKey', async () => {
+            await context.secrets.delete('gemini_api_key');
+            await getApiKey();
+        })
+    );
+
     const mapper = vscode.chat.createChatParticipant("mapper", async (request, context, response, token) => {
+        const apiKey = await getApiKey();
         
-        response.markdown("🔍 **@mapper is scanning your project...**\n\n");
-
-        // 1. Discovery: Find all configuration and source files
-        const files = await vscode.workspace.findFiles('**/*.{ts,js,py,env,sol}', '**/node_modules/**');
-        
-        if (files.length === 0) {
-            response.markdown("I couldn't find any service files to map. Try opening a project folder!");
+        if (!apiKey) {
+            response.markdown("❌ **Missing API Key.** I need a Gemini API key to scan your architecture. Use the command `Mapper: Set Gemini API Key` to add one.");
             return;
         }
 
-        // 2. Report: List what we found (This is the 'Retrieval' part of RAG)
-        response.markdown(`I found **${files.length}** files that might contain service connections. Here is the breakdown:`);
-        
-        const fileList = files.slice(0, 5).map(f => `* ${vscode.workspace.asRelativePath(f)}`).join('\n');
-        response.markdown(`\n${fileList}\n\n*...and ${files.length - 5} more.*`);
-
-        response.markdown("\n\nReady for Day 2? Next, I'll analyze these files to draw your Mermaid diagram!");
+        response.markdown("🔍 **@mapper is authorized and scanning...**");
+        // Your scanning and LangChain logic goes here!
     });
 }
