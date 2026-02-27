@@ -20,12 +20,26 @@
   ],
   "contributes": {
     "chatParticipants": [
+  {
+    "id": "mapper",
+    "name": "mapper",
+    "description": "Your project's architect and scrum master.",
+    "commands": [
       {
-        "id": "mapper",
-        "name": "mapper",
-        "description": "I can visualize your project architecture. Ask me to /draw a map!"
+        "name": "summary",
+        "description": "Generate a Daily Standup note from your recent Git commits."
+      },
+      {
+        "name": "draw",
+        "description": "Visualize the project's architecture with a Mermaid diagram."
+      },
+      {
+        "name": "explain",
+        "description": "Explain the role of the currently open file in the architecture."
       }
-    ],
+    ]
+  }
+],
     "commands": [
       {
         "command": "mapper.setGeminiKey",
@@ -49,11 +63,15 @@
     "package": "node esbuild.js --production"
   },
   "devDependencies": {
-    "@types/vscode": "^1.90.0",
+    "@types/node": "^25.3.2",
+    "@types/vscode": "^1.109.0",
     "esbuild": "^0.27.2",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@langchain/google-genai": "^2.1.20"
+    "@langchain/core": "^1.1.29",
+    "@langchain/google-genai": "^2.1.21"
   }
 }
+
+
