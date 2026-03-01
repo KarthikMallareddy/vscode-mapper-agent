@@ -697,6 +697,12 @@ function addSymbolsViews(
     const sectionFiles = new Set((scan.detailsByKind[sectionKind] || []).map((d) => d.filePath).filter(Boolean) as string[]);
     const sectionSymbols = scan.symbols
         .filter((s) => sectionFiles.size === 0 ? true : sectionFiles.has(s.filePath))
+        .sort((a, b) => {
+            const kindOrder = (k: SymbolKind) => (k === 'class' ? 0 : k === 'function' ? 1 : 2);
+            const ko = kindOrder(a.kind) - kindOrder(b.kind);
+            if (ko !== 0) return ko;
+            return a.name.localeCompare(b.name);
+        })
         .slice(0, 40);
 
     if (sectionSymbols.length === 0) {
@@ -710,18 +716,67 @@ function addSymbolsViews(
     const nav: Record<string, string> = {};
     const open: Record<string, { filePath: string; line: number }> = {};
 
-    for (let i = 0; i < sectionSymbols.length; i++) {
-        const s = sectionSymbols[i];
-        const sid = toMermaidId(`Sym_${i + 1}_${hashString(`${s.kind}:${s.name}:${s.relPath}:${s.line}`)}`);
-        const label = `${prefix} ${s.kind}: ${s.name}`;
-        lines.push(`  ${sid}[${escapeMermaidLabel(label)}]`);
-        lines.push(`  Root --> ${sid}`);
-        nav[label] = `symbol_${hashString(`${s.kind}:${s.name}:${s.relPath}:${s.line}`)}`;
-
-        // Also allow clicking the definition location label to open.
-        const defLabel = `${s.relPath}:${s.line}`;
-        open[defLabel] = { filePath: s.filePath, line: s.line };
+    // Arrange objects by file first. This keeps the first drill-down readable even for large repos.
+    const byFile = new Map<string, SymbolDef[]>();
+    for (const s of sectionSymbols) {
+        const arr = byFile.get(s.relPath) || [];
+        arr.push(s);
+        byFile.set(s.relPath, arr);
     }
+
+    const files = Array.from(byFile.keys()).sort((a, b) => a.localeCompare(b)).slice(0, 30);
+    const groups = new Map<string, string[]>();
+    for (const relPath of files) {
+        const dir = relPath.includes('/') ? relPath.split('/').slice(0, -1).join('/') : '(root)';
+        const list = groups.get(dir) || [];
+        list.push(relPath);
+        groups.set(dir, list);
+    }
+
+    lines.push('  Files[Files]');
+    lines.push('  Root --> Files');
+    lines.push('  subgraph FileGroups[By File]');
+    lines.push('    direction TB');
+
+    const dirNames = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b)).slice(0, 10);
+    let dirIndex = 0;
+    for (const dirName of dirNames) {
+        dirIndex++;
+        const dirId = toMermaidId(`Dir_${dirIndex}`);
+        lines.push(`    subgraph ${dirId}[${escapeMermaidLabel(dirName)}]`);
+        lines.push('      direction TB');
+
+        const rels = (groups.get(dirName) || []).slice(0, 12);
+        const fileNodeIds: string[] = [];
+        for (let i = 0; i < rels.length; i++) {
+            const rel = rels[i];
+            const defs = byFile.get(rel) || [];
+            const counts = countKinds(defs);
+            const label = `${rel} C${counts.classCount} F${counts.functionCount} V${counts.variableCount}`;
+            const nodeId = toMermaidId(`File_${hashString(rel)}`);
+            fileNodeIds.push(nodeId);
+            lines.push(`      ${nodeId}[${escapeMermaidLabel(label)}]`);
+
+            const fileViewId = `file_${hashString(`${sectionKind}:${rel}`)}`;
+            nav[label] = fileViewId;
+
+            // Click-to-open raw file (best effort). The label must match what we render.
+            const anyDef = defs[0];
+            if (anyDef) open[label] = { filePath: anyDef.filePath, line: 1 };
+
+            // Build per-file view now.
+            buildFileSymbolsView(views, navByViewId, openByViewId, scan, sectionKind, prefix, rel, defs, fileViewId);
+        }
+
+        // Chain within the directory to force vertical list layout.
+        for (let i = 0; i < fileNodeIds.length - 1; i++) {
+            lines.push(`      ${fileNodeIds[i]} --> ${fileNodeIds[i + 1]}`);
+        }
+
+        lines.push('    end');
+    }
+
+    lines.push('  end');
 
     views[viewId] = addClassStyling(lines.join('\n'));
     navByViewId[viewId] = nav;
@@ -776,6 +831,93 @@ function hashString(input: string): string {
         h = Math.imul(h, 16777619);
     }
     return (h >>> 0).toString(16);
+}
+
+function countKinds(defs: SymbolDef[]): { classCount: number; functionCount: number; variableCount: number } {
+    let classCount = 0;
+    let functionCount = 0;
+    let variableCount = 0;
+    for (const d of defs) {
+        if (d.kind === 'class') classCount++;
+        else if (d.kind === 'function') functionCount++;
+        else if (d.kind === 'variable') variableCount++;
+    }
+    return { classCount, functionCount, variableCount };
+}
+
+function buildFileSymbolsView(
+    views: Record<string, string>,
+    navByViewId: Record<string, Record<string, string>>,
+    openByViewId: Record<string, Record<string, { filePath: string; line: number }>>,
+    scan: WorkspaceScan,
+    sectionKind: ScanNodeKind,
+    prefix: string,
+    relPath: string,
+    defs: SymbolDef[],
+    viewId: string
+) {
+    const lines: string[] = [];
+    lines.push('flowchart TB');
+    const headerLabel = `File ${relPath}`;
+    lines.push(`  File[${escapeMermaidLabel(headerLabel)}]`);
+
+    const nav: Record<string, string> = {};
+    const open: Record<string, { filePath: string; line: number }> = {};
+
+    const anyDef = defs[0];
+    if (anyDef) {
+        open[headerLabel] = { filePath: anyDef.filePath, line: 1 };
+    }
+
+    const byKind: Record<SymbolKind, SymbolDef[]> = { class: [], function: [], variable: [] };
+    for (const d of defs) byKind[d.kind].push(d);
+    for (const k of Object.keys(byKind) as SymbolKind[]) {
+        byKind[k].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    const kindTitles: Array<{ kind: SymbolKind; title: string }> = [
+        { kind: 'class', title: 'Classes' },
+        { kind: 'function', title: 'Functions' },
+        { kind: 'variable', title: 'Variables' },
+    ];
+
+    lines.push('  subgraph Kinds[Objects]');
+    lines.push('    direction LR');
+
+    for (const kt of kindTitles) {
+        const list = byKind[kt.kind].slice(0, 25);
+        if (list.length === 0) continue;
+        const kindId = toMermaidId(`K_${kt.kind}_${hashString(`${viewId}:${kt.kind}`)}`);
+        lines.push(`    subgraph ${kindId}[${escapeMermaidLabel(kt.title)}]`);
+        lines.push('      direction TB');
+
+        const nodeIds: string[] = [];
+        for (const d of list) {
+            const stable = `${d.kind}:${d.name}:${d.relPath}:${d.line}`;
+            const nodeId = toMermaidId(`S_${hashString(stable)}`);
+            const label = `${prefix} ${d.kind} ${d.name}`;
+            nodeIds.push(nodeId);
+            lines.push(`      ${nodeId}[${escapeMermaidLabel(label)}]`);
+            nav[label] = `symbol_${hashString(stable)}`;
+        }
+        for (let i = 0; i < nodeIds.length - 1; i++) {
+            lines.push(`      ${nodeIds[i]} --> ${nodeIds[i + 1]}`);
+        }
+
+        lines.push('    end');
+        // Anchor from File to the first item in each kind for consistent layout.
+        const first = list[0];
+        if (first) {
+            const stable = `${first.kind}:${first.name}:${first.relPath}:${first.line}`;
+            lines.push(`    File --> ${toMermaidId(`S_${hashString(stable)}`)}`);
+        }
+    }
+
+    lines.push('  end');
+
+    views[viewId] = addClassStyling(lines.join('\n'));
+    navByViewId[viewId] = nav;
+    openByViewId[viewId] = open;
 }
 
 function hasAny(hints: Set<string>, needles: string[]): boolean {
