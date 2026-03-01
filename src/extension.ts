@@ -126,6 +126,22 @@ interface ScanNode {
     kind: ScanNodeKind;
 }
 
+type SymbolKind = 'function' | 'class' | 'variable';
+
+interface SymbolDef {
+    name: string;
+    kind: SymbolKind;
+    filePath: string; // absolute
+    relPath: string;  // workspace-relative
+    line: number;     // 1-based
+}
+
+interface SymbolUse {
+    filePath: string; // absolute
+    relPath: string;  // workspace-relative
+    line: number;     // 1-based
+}
+
 interface ScanEdge {
     from: string;
     to: string;
@@ -136,13 +152,16 @@ interface WorkspaceScan {
     nodes: ScanNode[];
     edges: ScanEdge[];
     notes: string[];
-    detailsByKind: Record<ScanNodeKind, Array<{ label: string }>>;
+    detailsByKind: Record<ScanNodeKind, Array<{ label: string; relPath?: string; filePath?: string }>>;
+    symbols: SymbolDef[];
+    symbolUses: Record<string, SymbolUse[]>; // key = `${kind}:${name}`
 }
 
 interface MermaidPreview {
     startViewId: string;
     views: Record<string, string>;
     navByViewId: Record<string, Record<string, string>>;
+    openByViewId: Record<string, Record<string, { filePath: string; line: number }>>;
 }
 
 async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
@@ -160,6 +179,9 @@ async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
         external: [],
         unknown: [],
     };
+    const symbols: SymbolDef[] = [];
+    const symbolUses: Record<string, SymbolUse[]> = {};
+    const inspectedSourceFiles = new Set<string>();
 
     const packageJsonUris = await vscode.workspace.findFiles(
         new vscode.RelativePattern(rootPath, '**/package.json'),
@@ -320,6 +342,7 @@ async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
             if (rel.startsWith('venv/') || rel.startsWith('.venv/')) continue;
             if (rel.includes('/__pycache__/')) continue;
             const text = await readTextFile(uri);
+            inspectedSourceFiles.add(uri.fsPath);
             const lower = (text || '').toLowerCase();
 
             const isStreamlitFile = /\bimport\s+streamlit\b|\bfrom\s+streamlit\b|\bst\./.test(lower) || rel.startsWith('pages/');
@@ -331,29 +354,34 @@ async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
             const usesExternal = /\bopenai\b|\bsupabase\b|\bfirebase_admin\b|\brequests\b|\bhttpx\b|\baiohttp\b/.test(lower);
 
             if (isStreamlitFile) {
-                detailsByKind.frontend.push({ label: rel });
+                detailsByKind.frontend.push({ label: rel, relPath: rel, filePath: uri.fsPath });
+                collectPythonSymbols(rootPath, uri.fsPath, rel, text || '', symbols);
                 continue;
             }
 
             if (isFastApiFile || isFlaskFile || isDjangoFile) {
-                detailsByKind.backend.push({ label: rel });
+                detailsByKind.backend.push({ label: rel, relPath: rel, filePath: uri.fsPath });
+                collectPythonSymbols(rootPath, uri.fsPath, rel, text || '', symbols);
                 continue;
             }
 
             if (usesDb) {
-                detailsByKind.datastore.push({ label: rel });
+                detailsByKind.datastore.push({ label: rel, relPath: rel, filePath: uri.fsPath });
+                collectPythonSymbols(rootPath, uri.fsPath, rel, text || '', symbols);
                 continue;
             }
 
             if (usesExternal) {
-                detailsByKind.external.push({ label: rel });
+                detailsByKind.external.push({ label: rel, relPath: rel, filePath: uri.fsPath });
+                collectPythonSymbols(rootPath, uri.fsPath, rel, text || '', symbols);
                 continue;
             }
 
             // Heuristic by folder name.
-            if (/(^|\/)(api|routes|router|controllers)(\/|$)/.test(rel)) detailsByKind.backend.push({ label: rel });
-            else if (/(^|\/)(ui|views|templates|static)(\/|$)/.test(rel)) detailsByKind.frontend.push({ label: rel });
-            else detailsByKind.unknown.push({ label: rel });
+            if (/(^|\/)(api|routes|router|controllers)(\/|$)/.test(rel)) detailsByKind.backend.push({ label: rel, relPath: rel, filePath: uri.fsPath });
+            else if (/(^|\/)(ui|views|templates|static)(\/|$)/.test(rel)) detailsByKind.frontend.push({ label: rel, relPath: rel, filePath: uri.fsPath });
+            else detailsByKind.unknown.push({ label: rel, relPath: rel, filePath: uri.fsPath });
+            collectPythonSymbols(rootPath, uri.fsPath, rel, text || '', symbols);
         }
 
         notes.push(`Python file scan: ${Math.min(pyUris.length, 250)} file(s) discovered; ${Math.min(pyUris.length, 120)} inspected.`);
@@ -490,7 +518,10 @@ async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
         }
     }
 
-    return { nodes, edges, notes, detailsByKind };
+    // Build a bounded "where used" index for extracted symbols (Python-focused for now).
+    await indexSymbolUses(rootPath, symbols, Array.from(inspectedSourceFiles), symbolUses, notes);
+
+    return { nodes, edges, notes, detailsByKind, symbols, symbolUses };
 }
 
 function inferKindFromPackage(pkg: { dirName: string; deps: Set<string> }): ScanNodeKind {
@@ -509,6 +540,242 @@ function inferKindFromPackage(pkg: { dirName: string; deps: Set<string> }): Scan
 function ensureNode(nodes: ScanNode[], id: string, label: string, kind: ScanNodeKind) {
     if (nodes.some((n) => n.id === id)) return;
     nodes.push({ id, label, kind });
+}
+
+function collectPythonSymbols(rootPath: string, filePath: string, relPath: string, text: string, out: SymbolDef[]) {
+    // Very lightweight Python symbol extraction (module-level defs/classes, plus top-level assignments).
+    // This is heuristic by design; keeps the diagram explainable without needing a full parser.
+    const lines = text.replace(/\r\n/g, '\n').split('\n');
+    const maxSymbolsPerFile = 30;
+    let added = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        if (/^\s+/.test(line)) continue; // skip indented (nested) for now
+        if (/^\s*#/.test(line)) continue;
+
+        const defMatch = line.match(/^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+        if (defMatch) {
+            out.push({ name: defMatch[1], kind: 'function', filePath, relPath, line: i + 1 });
+            added++;
+            if (added >= maxSymbolsPerFile) return;
+            continue;
+        }
+
+        const classMatch = line.match(/^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(|:)/);
+        if (classMatch) {
+            out.push({ name: classMatch[1], kind: 'class', filePath, relPath, line: i + 1 });
+            added++;
+            if (added >= maxSymbolsPerFile) return;
+            continue;
+        }
+
+        const assignMatch = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^=]/);
+        if (assignMatch) {
+            const name = assignMatch[1];
+            // Ignore obvious dunder/constants and ultra-common names.
+            if (name.startsWith('__')) continue;
+            if (['app', 'main', 'data', 'df', 'st', 'logger', 'config'].includes(name.toLowerCase())) continue;
+            out.push({ name, kind: 'variable', filePath, relPath, line: i + 1 });
+            added++;
+            if (added >= maxSymbolsPerFile) return;
+        }
+    }
+}
+
+async function indexSymbolUses(
+    rootPath: string,
+    symbols: SymbolDef[],
+    inspectedFiles: string[],
+    outUses: Record<string, SymbolUse[]>,
+    notes: string[]
+) {
+    // Bounded global usage scan across extracted symbols and already-inspected Python files.
+    // Keeps output useful without turning into a full code-indexer.
+    const maxSymbols = 120;
+    const maxUsesPerSymbol = 10;
+
+    const unique: SymbolDef[] = [];
+    const seen = new Set<string>();
+
+    for (const s of symbols) {
+        if (!s.name || s.name.length < 3) continue;
+        const key = `${s.kind}:${s.name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(s);
+        if (unique.length >= maxSymbols) break;
+    }
+
+    if (unique.length === 0) return;
+
+    // Scan usages across the files we already inspected (best-effort).
+    const files = inspectedFiles.slice(0, 120);
+    notes.push(`Indexed ${unique.length} symbol(s) across ${files.length} file(s).`);
+
+    const fileTextByPath = new Map<string, string>();
+    for (const fp of files) {
+        try {
+            const uri = vscode.Uri.file(fp);
+            const bytes = await vscode.workspace.fs.readFile(uri);
+            const text = Buffer.from(bytes).toString('utf8');
+            fileTextByPath.set(fp, text);
+        } catch {
+            // ignore
+        }
+    }
+
+    for (const sym of unique) {
+        const key = `${sym.kind}:${sym.name}`;
+        const uses: SymbolUse[] = [];
+        const re = new RegExp(`\\\\b${escapeRegex(sym.name)}\\\\b`);
+
+        for (const fp of files) {
+            const text = fileTextByPath.get(fp);
+            if (!text) continue;
+            const rel = path.relative(rootPath, fp).replace(/\\/g, '/');
+            const lines = text.replace(/\r\n/g, '\n').split('\n');
+            for (let i = 0; i < lines.length; i++) {
+                if (fp === sym.filePath && i + 1 === sym.line) continue; // skip definition line
+                if (!re.test(lines[i])) continue;
+                uses.push({ filePath: fp, relPath: rel, line: i + 1 });
+                if (uses.length >= maxUsesPerSymbol) break;
+            }
+            if (uses.length >= maxUsesPerSymbol) break;
+        }
+
+        outUses[key] = uses;
+    }
+}
+
+function escapeRegex(input: string): string {
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildSymbolsNav(scan: WorkspaceScan, kind: ScanNodeKind): Record<string, string> {
+    const nav: Record<string, string> = {};
+    const rootId = kind === 'frontend' ? 'Frontend' : kind === 'backend' ? 'Backend' : kind === 'datastore' ? 'DataStore' : kind === 'external' ? 'External' : 'Other';
+    nav['Objects: where defined and used'] = `objects_${kind}`;
+    // allow clicking the section root to open a symbol view too
+    nav[rootId] = `objects_${kind}`;
+    return nav;
+}
+
+function buildOpenMapForDetails(scan: WorkspaceScan, kind: ScanNodeKind): Record<string, { filePath: string; line: number }> {
+    const open: Record<string, { filePath: string; line: number }> = {};
+    const details = scan.detailsByKind[kind] || [];
+    const prefix =
+        kind === 'frontend' ? 'UI:' :
+        kind === 'backend' ? 'API:' :
+        kind === 'datastore' ? 'DB:' :
+        kind === 'external' ? 'EXT:' :
+        '';
+    for (const d of details) {
+        if (!d.filePath || !d.relPath) continue;
+        // Match on either the raw relPath or the prefixed label used in views.
+        open[d.relPath] = { filePath: d.filePath, line: 1 };
+        open[d.label] = { filePath: d.filePath, line: 1 };
+        if (prefix) open[`${prefix} ${d.relPath}`] = { filePath: d.filePath, line: 1 };
+    }
+    return open;
+}
+
+function addSymbolsViews(
+    views: Record<string, string>,
+    navByViewId: Record<string, Record<string, string>>,
+    openByViewId: Record<string, Record<string, { filePath: string; line: number }>>,
+    scan: WorkspaceScan,
+    sectionKind: ScanNodeKind,
+    prefix: string
+) {
+    const viewId = `objects_${sectionKind}`;
+    const lines: string[] = [];
+    lines.push('flowchart TB');
+    lines.push(`  Root[Objects in ${escapeMermaidLabel(sectionKind)}]`);
+
+    const sectionFiles = new Set((scan.detailsByKind[sectionKind] || []).map((d) => d.filePath).filter(Boolean) as string[]);
+    const sectionSymbols = scan.symbols
+        .filter((s) => sectionFiles.size === 0 ? true : sectionFiles.has(s.filePath))
+        .slice(0, 40);
+
+    if (sectionSymbols.length === 0) {
+        lines.push('  Root --> Empty[No objects detected]');
+        views[viewId] = addClassStyling(lines.join('\n'));
+        navByViewId[viewId] = {};
+        openByViewId[viewId] = {};
+        return;
+    }
+
+    const nav: Record<string, string> = {};
+    const open: Record<string, { filePath: string; line: number }> = {};
+
+    for (let i = 0; i < sectionSymbols.length; i++) {
+        const s = sectionSymbols[i];
+        const sid = toMermaidId(`Sym_${i + 1}_${hashString(`${s.kind}:${s.name}:${s.relPath}:${s.line}`)}`);
+        const label = `${prefix} ${s.kind}: ${s.name}`;
+        lines.push(`  ${sid}[${escapeMermaidLabel(label)}]`);
+        lines.push(`  Root --> ${sid}`);
+        nav[label] = `symbol_${hashString(`${s.kind}:${s.name}:${s.relPath}:${s.line}`)}`;
+
+        // Also allow clicking the definition location label to open.
+        const defLabel = `${s.relPath}:${s.line}`;
+        open[defLabel] = { filePath: s.filePath, line: s.line };
+    }
+
+    views[viewId] = addClassStyling(lines.join('\n'));
+    navByViewId[viewId] = nav;
+    openByViewId[viewId] = open;
+
+    // Individual symbol views with "defined in" and "used in" locations.
+    for (const s of sectionSymbols) {
+        const symKey = `${s.kind}:${s.name}`;
+        const symViewId = `symbol_${hashString(`${s.kind}:${s.name}:${s.relPath}:${s.line}`)}`;
+        const sv: string[] = [];
+        sv.push('flowchart TB');
+        sv.push(`  Sym[${escapeMermaidLabel(`${prefix} ${s.kind}: ${s.name}`)}]`);
+
+        const defNode = toMermaidId(`Def_${hashString(`${s.relPath}:${s.line}`)}`);
+        const defLabel = `Defined: ${s.relPath}:${s.line}`;
+        sv.push(`  ${defNode}[${escapeMermaidLabel(defLabel)}]`);
+        sv.push(`  Sym --> ${defNode}`);
+
+        const uses = (scan.symbolUses[symKey] || []).slice(0, 8);
+        if (uses.length === 0) {
+            const noneId = toMermaidId(`NoUses_${hashString(symKey)}`);
+            sv.push(`  ${noneId}[No usages indexed]`);
+            sv.push(`  Sym --> ${noneId}`);
+        } else {
+            for (let i = 0; i < uses.length; i++) {
+                const u = uses[i];
+                const uid = toMermaidId(`Use_${i + 1}_${hashString(`${u.relPath}:${u.line}`)}`);
+                const uLabel = `Used: ${u.relPath}:${u.line}`;
+                sv.push(`  ${uid}[${escapeMermaidLabel(uLabel)}]`);
+                sv.push(`  Sym --> ${uid}`);
+            }
+        }
+
+        views[symViewId] = addClassStyling(sv.join('\n'));
+        navByViewId[symViewId] = {};
+
+        const openMap: Record<string, { filePath: string; line: number }> = {};
+        openMap[defLabel] = { filePath: s.filePath, line: s.line };
+        for (const u of uses) {
+            const uLabel = `Used: ${u.relPath}:${u.line}`;
+            openMap[uLabel] = { filePath: u.filePath, line: u.line };
+        }
+        openByViewId[symViewId] = openMap;
+    }
+}
+
+function hashString(input: string): string {
+    // Non-cryptographic stable hash for view ids.
+    let h = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+        h ^= input.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
 }
 
 function hasAny(hints: Set<string>, needles: string[]): boolean {
@@ -750,6 +1017,7 @@ function buildMermaidFromScan(scan: WorkspaceScan): string {
 function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     const views: Record<string, string> = {};
     const navByViewId: Record<string, Record<string, string>> = {};
+    const openByViewId: MermaidPreview["openByViewId"] = {};
 
     // Overview: keep it intentionally high-level for readability, with drill-down navigation.
     const overviewNodes: Array<{ id: string; label: string }> = [
@@ -794,6 +1062,7 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     if (scan.detailsByKind.datastore.length) nav.DataStore = 'datastore';
     if (scan.detailsByKind.external.length) nav.External = 'external';
     navByViewId.overview = nav;
+    openByViewId.overview = {};
 
     // Drill-down views: show the concrete nodes found for each section.
     views.frontend = addClassStyling(buildSectionView(scan, 'frontend', 'Frontend', 'Frontend', 'UI:'));
@@ -802,12 +1071,23 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     views.external = addClassStyling(buildSectionView(scan, 'external', 'External', 'External', 'EXT:'));
 
     // No special navigation inside section views for now.
-    navByViewId.frontend = {};
-    navByViewId.backend = {};
-    navByViewId.datastore = {};
-    navByViewId.external = {};
+    navByViewId.frontend = buildSymbolsNav(scan, 'frontend');
+    navByViewId.backend = buildSymbolsNav(scan, 'backend');
+    navByViewId.datastore = buildSymbolsNav(scan, 'datastore');
+    navByViewId.external = buildSymbolsNav(scan, 'external');
 
-    return { startViewId: 'overview', views, navByViewId };
+    openByViewId.frontend = buildOpenMapForDetails(scan, 'frontend');
+    openByViewId.backend = buildOpenMapForDetails(scan, 'backend');
+    openByViewId.datastore = buildOpenMapForDetails(scan, 'datastore');
+    openByViewId.external = buildOpenMapForDetails(scan, 'external');
+
+    // Symbols views per section (click "Objects" to navigate).
+    addSymbolsViews(views, navByViewId, openByViewId, scan, 'frontend', 'UI');
+    addSymbolsViews(views, navByViewId, openByViewId, scan, 'backend', 'API');
+    addSymbolsViews(views, navByViewId, openByViewId, scan, 'datastore', 'DB');
+    addSymbolsViews(views, navByViewId, openByViewId, scan, 'external', 'EXT');
+
+    return { startViewId: 'overview', views, navByViewId, openByViewId };
 }
 
 function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string, rootId: string, labelPrefix: string): string {
@@ -820,6 +1100,11 @@ function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string
         lines.push(`  ${rootId} --> Empty[No ${escapeMermaidLabel(title)} items detected]`);
         return lines.join('\n');
     }
+
+    // Add an "Objects" entrypoint for symbol-level drill-down.
+    const objectsId = toMermaidId(`${rootId}_Objects`);
+    lines.push(`  ${objectsId}[Objects: where defined and used]`);
+    lines.push(`  ${rootId} --> ${objectsId}`);
 
     // Group by top-level directory to avoid one gigantic horizontal row.
     const groups = new Map<string, string[]>();
@@ -999,6 +1284,21 @@ function openMermaidPreview(preview: MermaidPreview) {
     const base64Payload = Buffer.from(JSON.stringify(preview)).toString('base64');
     const nonce = getNonce();
 
+    panel.webview.onDidReceiveMessage(async (message) => {
+        if (!message || typeof message !== 'object') return;
+        if (message.type === 'open' && message.filePath) {
+            try {
+                const fileUri = vscode.Uri.file(String(message.filePath));
+                const doc = await vscode.workspace.openTextDocument(fileUri);
+                const line = Math.max(0, Number(message.line || 1) - 1);
+                const pos = new vscode.Position(line, 0);
+                await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos) });
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`@mapper: Could not open file: ${err?.message || String(err)}`);
+            }
+        }
+    });
+
     panel.webview.html = `
         <!DOCTYPE html>
         <html>
@@ -1034,6 +1334,7 @@ function openMermaidPreview(preview: MermaidPreview) {
                 const backBtn = document.getElementById('backBtn');
                 const titleEl = document.getElementById('title');
                 const hintEl = document.getElementById('hint');
+                const vscode = acquireVsCodeApi();
 
                 function showError(message) {
                     container.innerHTML = "<div style='color:red; padding:20px; max-width: 900px;'><b>Render Error:</b><br/>" + message + "</div>";
@@ -1049,6 +1350,7 @@ function openMermaidPreview(preview: MermaidPreview) {
                         const payload = JSON.parse(atob('${base64Payload}'));
                         const views = payload.views || {};
                         const navByViewId = payload.navByViewId || {};
+                        const openByViewId = payload.openByViewId || {};
                         let currentViewId = payload.startViewId || 'overview';
                         const stack = [];
                         let panZoomInstance = null;
@@ -1078,7 +1380,8 @@ function openMermaidPreview(preview: MermaidPreview) {
 
                             // Wire navigation clicks for this view (based on visible node labels).
                             const nav = navByViewId[viewId] || {};
-                            const clickableCount = wireClickableNodes(svgElement, nav);
+                            const openMap = openByViewId[viewId] || {};
+                            const clickableCount = wireClickableNodes(svgElement, nav, openMap);
                             if (viewId === 'overview') {
                                 hintEl.textContent = clickableCount > 0
                                     ? 'Click a section to expand. Scroll to Zoom. Drag to Pan.'
@@ -1107,13 +1410,24 @@ function openMermaidPreview(preview: MermaidPreview) {
                                 .replace(/[^a-z0-9]+/g, '');
                         }
 
-                        function wireClickableNodes(svgElement, nav) {
-                            if (!nav || Object.keys(nav).length === 0) return 0;
+                        function wireClickableNodes(svgElement, nav, openMap) {
+                            const hasNav = nav && Object.keys(nav).length > 0;
+                            const hasOpen = openMap && Object.keys(openMap).length > 0;
+                            if (!hasNav && !hasOpen) return 0;
 
                             const normNav = {};
-                            Object.keys(nav).forEach((k) => {
-                                normNav[normKey(k)] = nav[k];
-                            });
+                            if (hasNav) {
+                                Object.keys(nav).forEach((k) => {
+                                    normNav[normKey(k)] = nav[k];
+                                });
+                            }
+
+                            const normOpen = {};
+                            if (hasOpen) {
+                                Object.keys(openMap).forEach((k) => {
+                                    normOpen[normKey(k)] = openMap[k];
+                                });
+                            }
 
                             let wired = 0;
                             const nodes = svgElement.querySelectorAll('g.node, g[class*="node"]');
@@ -1123,38 +1437,61 @@ function openMermaidPreview(preview: MermaidPreview) {
 
                                 const candidates = [title, label, g.id || ''];
                                 let target = null;
+                                let openTarget = null;
                                 for (const c of candidates) {
                                     const nk = normKey(c);
+
+                                    const ot = normOpen[nk];
+                                    if (ot) { openTarget = ot; break; }
+
                                     const t = normNav[nk];
                                     if (t) { target = t; break; }
 
                                     // Prefix match (e.g. "Frontend: 12" should match nav key "Frontend").
-                                    for (const key of Object.keys(normNav)) {
+                                    for (const key of Object.keys(normOpen)) {
                                         if (key && nk.startsWith(key)) {
-                                            target = normNav[key];
+                                            openTarget = normOpen[key];
                                             break;
                                         }
                                     }
-                                    if (target) break;
+
+                                    if (!openTarget) {
+                                        for (const key of Object.keys(normNav)) {
+                                            if (key && nk.startsWith(key)) {
+                                                target = normNav[key];
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    if (openTarget || target) break;
                                 }
 
                                 // Fallback: match by SVG group id containing the key (Mermaid often encodes ids like "flowchart-Frontend-0").
-                                if (!target && g.id) {
+                                if (!openTarget && !target && g.id) {
                                     const nid = normKey(g.id);
-                                    for (const key of Object.keys(normNav)) {
-                                        if (key && nid.includes(key)) {
-                                            target = normNav[key];
-                                            break;
+                                    for (const key of Object.keys(normOpen)) {
+                                        if (key && nid.includes(key)) { openTarget = normOpen[key]; break; }
+                                    }
+                                    if (!openTarget) {
+                                        for (const key of Object.keys(normNav)) {
+                                            if (key && nid.includes(key)) { target = normNav[key]; break; }
                                         }
                                     }
                                 }
-                                if (!target) return;
+                                if (!openTarget && !target) return;
 
                                 g.classList.add('clickable');
                                 g.addEventListener('click', (e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    renderView(target, true).catch((err) => showError(err.message || String(err)));
+                                    if (openTarget && openTarget.filePath) {
+                                        vscode.postMessage({ type: 'open', filePath: openTarget.filePath, line: openTarget.line || 1 });
+                                        return;
+                                    }
+                                    if (target) {
+                                        renderView(target, true).catch((err) => showError(err.message || String(err)));
+                                    }
                                 });
                                 wired++;
                             });
