@@ -1,0 +1,85 @@
+{
+  "name": "vscode-mapper-agent",
+  "displayName": "@mapper",
+  "description": "AI-powered architecture mapping for VS Code using LangChain.",
+  "version": "0.0.1",
+  "publisher": "harry-brave",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onChatParticipant:mapper"
+  ],
+  "main": "./dist/extension.js",
+  "enabledApiProposals": [
+    "chatParticipant"
+  ],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "mapper",
+        "name": "mapper",
+        "description": "I can visualize your project architecture.",
+        "commands": [
+          {
+            "name": "draw",
+            "description": "Generate a Mermaid.js architecture diagram of the current project."
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "mapper.setGeminiKey",
+        "title": "Mapper: Set Gemini API Key"
+      }
+    ],
+    "configuration": {
+      "title": "@mapper",
+      "properties": {
+        "mapper.useUserKey": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to use your own Gemini API key for mapping."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "@types/vscode": "^1.109.0",
+    "esbuild": "^0.27.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.1.29",
+    "@langchain/google-genai": "^2.1.21"
+  }
+}
+
+async function getFileTree(dir: string, depth = 0): Promise<string> {
+    if (depth > 2) return ""; // Keep it high-level to avoid hitting token limits
+    const entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dir));
+    let tree = "";
+    
+    for (const [name, type] of entries) {
+        // Skip heavy or hidden folders to keep the diagram clean
+        if (['node_modules', '.git', 'dist', '.history', '.vscode'].includes(name)) continue;
+        
+        tree += `${"  ".repeat(depth)}${type === vscode.FileType.Directory ? "📁" : "📄"} ${name}\n`;
+        
+        if (type === vscode.FileType.Directory) {
+            tree += await getFileTree(path.join(dir, name), depth + 1);
+        }
+    }
+    return tree;
+}
