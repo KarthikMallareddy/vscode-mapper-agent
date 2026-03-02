@@ -134,12 +134,14 @@ interface SymbolDef {
     filePath: string; // absolute
     relPath: string;  // workspace-relative
     line: number;     // 1-based
+    decorators?: Array<{ line: number; text: string }>; // module-level decorators above def/class
 }
 
 interface SymbolUse {
     filePath: string; // absolute
     relPath: string;  // workspace-relative
     line: number;     // 1-based
+    note?: string;
 }
 
 interface ScanEdge {
@@ -154,7 +156,7 @@ interface WorkspaceScan {
     notes: string[];
     detailsByKind: Record<ScanNodeKind, Array<{ label: string; relPath?: string; filePath?: string }>>;
     symbols: SymbolDef[];
-    symbolUses: Record<string, SymbolUse[]>; // key = `${kind}:${name}`
+    symbolUses: Record<string, SymbolUse[]>; // key = stable symbol key
 }
 
 interface MermaidPreview {
@@ -162,6 +164,10 @@ interface MermaidPreview {
     views: Record<string, string>;
     navByViewId: Record<string, Record<string, string>>;
     openByViewId: Record<string, Record<string, { filePath: string; line: number }>>;
+    catalog: {
+        files: Array<{ relPath: string; filePath: string; classCount: number; functionCount: number; variableCount: number }>;
+        symbolsByFile: Record<string, Array<{ kind: SymbolKind; name: string; viewId: string; defFilePath: string; defLine: number; stableKey: string }>>;
+    };
 }
 
 async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
@@ -333,10 +339,40 @@ async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
             250
         );
 
+        const scorePyPath = (relPath: string): number => {
+            const r = relPath.toLowerCase();
+            let score = 0;
+
+            // Entrypoints and common app files.
+            if (/(^|\/)(app|main|server|run|streamlit_app)\.py$/.test(r)) score += 60;
+            if (r.endsWith('/app.py') || r.endsWith('/main.py')) score += 30;
+            if (r === 'app.py' || r === 'main.py') score += 40;
+
+            // High-signal folders for frameworks.
+            if (/(^|\/)(api|routes|routers|router|controllers|backend|server)(\/|$)/.test(r)) score += 25;
+            if (/(^|\/)(pages)(\/|$)/.test(r)) score += 15; // Streamlit multipage
+            if (/(^|\/)(frontend|ui|views|templates|static)(\/|$)/.test(r)) score += 10;
+
+            // Deprioritize noise.
+            if (/(^|\/)tests?(\/|$)/.test(r)) score -= 30;
+            if (r.endsWith('__init__.py')) score -= 10;
+            if (r.startsWith('.history/')) score -= 100;
+
+            return score;
+        };
+
+        const pyUrisSorted = pyUris
+            .slice()
+            .sort((a, b) => {
+                const ar = path.relative(rootPath, a.fsPath).replace(/\\/g, '/');
+                const br = path.relative(rootPath, b.fsPath).replace(/\\/g, '/');
+                return scorePyPath(br) - scorePyPath(ar);
+            });
+
         // Cap reads to keep scanning quick.
-        const maxFilesToRead = Math.min(pyUris.length, 120);
+        const maxFilesToRead = Math.min(pyUrisSorted.length, 120);
         for (let i = 0; i < maxFilesToRead; i++) {
-            const uri = pyUris[i];
+            const uri = pyUrisSorted[i];
             const rel = path.relative(rootPath, uri.fsPath).replace(/\\/g, '/');
             if (rel.startsWith('.history/') || rel.startsWith('.git/')) continue;
             if (rel.startsWith('venv/') || rel.startsWith('.venv/')) continue;
@@ -384,7 +420,7 @@ async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
             collectPythonSymbols(rootPath, uri.fsPath, rel, text || '', symbols);
         }
 
-        notes.push(`Python file scan: ${Math.min(pyUris.length, 250)} file(s) discovered; ${Math.min(pyUris.length, 120)} inspected.`);
+        notes.push(`Python file scan: ${Math.min(pyUris.length, 250)} file(s) discovered; ${Math.min(pyUrisSorted.length, 120)} inspected.`);
     }
 
     // If we still don't have any signals, do a lightweight source scan for framework/service imports.
@@ -549,6 +585,24 @@ function collectPythonSymbols(rootPath: string, filePath: string, relPath: strin
     const maxSymbolsPerFile = 30;
     let added = 0;
 
+    const collectDecoratorsAbove = (defLineIdx: number): Array<{ line: number; text: string }> => {
+        // Collect contiguous top-level decorators immediately above the def/class line.
+        // We stop at the first blank line or non-decorator (comments are skipped).
+        const decorators: Array<{ line: number; text: string }> = [];
+        for (let j = defLineIdx - 1; j >= 0; j--) {
+            const raw = lines[j] ?? '';
+            const trimmed = raw.trim();
+            if (!trimmed) break;
+            if (trimmed.startsWith('#')) continue;
+            if (/^\s+/.test(raw)) break; // nested / indented
+            const m = raw.match(/^\s*@\s*(.+)\s*$/);
+            if (!m) break;
+            decorators.push({ line: j + 1, text: `@${m[1].trim()}` });
+        }
+        decorators.reverse();
+        return decorators;
+    };
+
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (!line) continue;
@@ -557,7 +611,8 @@ function collectPythonSymbols(rootPath: string, filePath: string, relPath: strin
 
         const defMatch = line.match(/^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
         if (defMatch) {
-            out.push({ name: defMatch[1], kind: 'function', filePath, relPath, line: i + 1 });
+            const decorators = collectDecoratorsAbove(i);
+            out.push({ name: defMatch[1], kind: 'function', filePath, relPath, line: i + 1, decorators: decorators.length ? decorators : undefined });
             added++;
             if (added >= maxSymbolsPerFile) return;
             continue;
@@ -565,7 +620,8 @@ function collectPythonSymbols(rootPath: string, filePath: string, relPath: strin
 
         const classMatch = line.match(/^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(|:)/);
         if (classMatch) {
-            out.push({ name: classMatch[1], kind: 'class', filePath, relPath, line: i + 1 });
+            const decorators = collectDecoratorsAbove(i);
+            out.push({ name: classMatch[1], kind: 'class', filePath, relPath, line: i + 1, decorators: decorators.length ? decorators : undefined });
             added++;
             if (added >= maxSymbolsPerFile) return;
             continue;
@@ -596,12 +652,14 @@ async function indexSymbolUses(
     const maxSymbols = 120;
     const maxUsesPerSymbol = 10;
 
+    const stableKeyFor = (s: SymbolDef): string => `${s.kind}:${s.name}:${s.relPath}:${s.line}`;
+
     const unique: SymbolDef[] = [];
     const seen = new Set<string>();
 
     for (const s of symbols) {
         if (!s.name || s.name.length < 3) continue;
-        const key = `${s.kind}:${s.name}`;
+        const key = stableKeyFor(s);
         if (seen.has(key)) continue;
         seen.add(key);
         unique.push(s);
@@ -627,9 +685,33 @@ async function indexSymbolUses(
     }
 
     for (const sym of unique) {
-        const key = `${sym.kind}:${sym.name}`;
+        const key = stableKeyFor(sym);
         const uses: SymbolUse[] = [];
         const re = new RegExp(`\\\\b${escapeRegex(sym.name)}\\\\b`);
+
+        const pushUse = (u: SymbolUse) => {
+            if (uses.some((x) => x.filePath === u.filePath && x.line === u.line)) return;
+            uses.push(u);
+        };
+
+        // Framework "implicit usage" patterns where a function is registered but never referenced by name.
+        // Example: FastAPI/Flask route handlers via decorators, Streamlit cached functions via decorators.
+        if (sym.decorators && sym.decorators.length) {
+            for (const d of sym.decorators) {
+                const t = (d.text || '').toLowerCase();
+                let note: string | undefined;
+                if (/\.(get|post|put|delete|patch|options|head|trace|route|websocket)\b/.test(t) && /@[\w.]+\./.test(t)) {
+                    note = 'Route decorator';
+                } else if (/\.(middleware|exception_handler|on_event)\b/.test(t) && /@[\w.]+\./.test(t)) {
+                    note = 'Framework hook';
+                } else if (/\bst\.(cache_data|cache_resource|cache|experimental_memo|experimental_singleton|fragment|dialog)\b/.test(t)) {
+                    note = 'Streamlit decorator';
+                }
+                if (note) {
+                    pushUse({ filePath: sym.filePath, relPath: sym.relPath, line: d.line, note });
+                }
+            }
+        }
 
         for (const fp of files) {
             const text = fileTextByPath.get(fp);
@@ -639,7 +721,23 @@ async function indexSymbolUses(
             for (let i = 0; i < lines.length; i++) {
                 if (fp === sym.filePath && i + 1 === sym.line) continue; // skip definition line
                 if (!re.test(lines[i])) continue;
-                uses.push({ filePath: fp, relPath: rel, line: i + 1 });
+
+                const raw = lines[i] || '';
+                const lower = raw.toLowerCase();
+                let note: string | undefined;
+
+                // Common FastAPI patterns.
+                if (/\bdepends\s*\(\s*/.test(lower)) note = 'FastAPI Depends';
+                if (/\badd_api_route\s*\(/.test(lower)) note = 'FastAPI add_api_route';
+
+                // Common Streamlit callback patterns.
+                if (/\bon_(click|change)\s*=\s*/.test(lower)) note = 'Streamlit callback';
+                if (/\bst\.(button|checkbox|radio|selectbox|multiselect|slider|text_input|text_area|number_input|date_input|time_input|file_uploader|form_submit_button)\s*\(/.test(lower) &&
+                    /\bon_(click|change)\s*=/.test(lower)) {
+                    note = 'Streamlit callback';
+                }
+
+                pushUse({ filePath: fp, relPath: rel, line: i + 1, note });
                 if (uses.length >= maxUsesPerSymbol) break;
             }
             if (uses.length >= maxUsesPerSymbol) break;
@@ -784,8 +882,8 @@ function addSymbolsViews(
 
     // Individual symbol views with "defined in" and "used in" locations.
     for (const s of sectionSymbols) {
-        const symKey = `${s.kind}:${s.name}`;
-        const symViewId = `symbol_${hashString(`${s.kind}:${s.name}:${s.relPath}:${s.line}`)}`;
+        const stableKey = `${s.kind}:${s.name}:${s.relPath}:${s.line}`;
+        const symViewId = `symbol_${hashString(stableKey)}`;
         const sv: string[] = [];
         sv.push('flowchart TB');
         sv.push(`  Sym[${escapeMermaidLabel(`${prefix} ${s.kind}: ${s.name}`)}]`);
@@ -795,16 +893,16 @@ function addSymbolsViews(
         sv.push(`  ${defNode}[${escapeMermaidLabel(defLabel)}]`);
         sv.push(`  Sym --> ${defNode}`);
 
-        const uses = (scan.symbolUses[symKey] || []).slice(0, 8);
+        const uses = (scan.symbolUses[stableKey] || []).slice(0, 8);
         if (uses.length === 0) {
-            const noneId = toMermaidId(`NoUses_${hashString(symKey)}`);
+            const noneId = toMermaidId(`NoUses_${hashString(stableKey)}`);
             sv.push(`  ${noneId}[No usages indexed]`);
             sv.push(`  Sym --> ${noneId}`);
         } else {
             for (let i = 0; i < uses.length; i++) {
                 const u = uses[i];
                 const uid = toMermaidId(`Use_${i + 1}_${hashString(`${u.relPath}:${u.line}`)}`);
-                const uLabel = `Used: ${u.relPath}:${u.line}`;
+                const uLabel = u.note ? `Used: ${u.relPath}:${u.line} - ${u.note}` : `Used: ${u.relPath}:${u.line}`;
                 sv.push(`  ${uid}[${escapeMermaidLabel(uLabel)}]`);
                 sv.push(`  Sym --> ${uid}`);
             }
@@ -816,7 +914,7 @@ function addSymbolsViews(
         const openMap: Record<string, { filePath: string; line: number }> = {};
         openMap[defLabel] = { filePath: s.filePath, line: s.line };
         for (const u of uses) {
-            const uLabel = `Used: ${u.relPath}:${u.line}`;
+            const uLabel = u.note ? `Used: ${u.relPath}:${u.line} - ${u.note}` : `Used: ${u.relPath}:${u.line}`;
             openMap[uLabel] = { filePath: u.filePath, line: u.line };
         }
         openByViewId[symViewId] = openMap;
@@ -918,6 +1016,107 @@ function buildFileSymbolsView(
     views[viewId] = addClassStyling(lines.join('\n'));
     navByViewId[viewId] = nav;
     openByViewId[viewId] = open;
+}
+
+function buildCatalog(scan: WorkspaceScan): MermaidPreview["catalog"] {
+    const symbolsByFile: MermaidPreview["catalog"]["symbolsByFile"] = {};
+    const countsByFile = new Map<string, { filePath: string; classCount: number; functionCount: number; variableCount: number }>();
+
+    for (const s of scan.symbols) {
+        const arr = symbolsByFile[s.relPath] || [];
+        const stable = `${s.kind}:${s.name}:${s.relPath}:${s.line}`;
+        arr.push({
+            kind: s.kind,
+            name: s.name,
+            viewId: `symbol_${hashString(stable)}`,
+            defFilePath: s.filePath,
+            defLine: s.line,
+        });
+        symbolsByFile[s.relPath] = arr;
+
+        const cur = countsByFile.get(s.relPath) || { filePath: s.filePath, classCount: 0, functionCount: 0, variableCount: 0 };
+        if (s.kind === 'class') cur.classCount++;
+        else if (s.kind === 'function') cur.functionCount++;
+        else if (s.kind === 'variable') cur.variableCount++;
+        countsByFile.set(s.relPath, cur);
+    }
+
+    const files: MermaidPreview["catalog"]["files"] = [];
+    for (const [relPath, c] of countsByFile.entries()) {
+        files.push({ relPath, filePath: c.filePath, classCount: c.classCount, functionCount: c.functionCount, variableCount: c.variableCount });
+    }
+
+    files.sort((a, b) => a.relPath.localeCompare(b.relPath));
+
+    // Keep catalog bounded.
+    const maxFiles = 200;
+    const trimmedFiles = files.slice(0, maxFiles);
+    const trimmedSymbolsByFile: typeof symbolsByFile = {};
+    for (const f of trimmedFiles) {
+        trimmedSymbolsByFile[f.relPath] = (symbolsByFile[f.relPath] || []).slice(0, 120);
+    }
+
+    return { files: trimmedFiles, symbolsByFile: trimmedSymbolsByFile };
+}
+
+function addGlobalSymbolViews(
+    views: Record<string, string>,
+    navByViewId: Record<string, Record<string, string>>,
+    openByViewId: Record<string, Record<string, { filePath: string; line: number }>>,
+    scan: WorkspaceScan,
+    catalog: MermaidPreview["catalog"]
+) {
+    // Build missing symbol_* views referenced by the picker (and any other UI).
+    // Bound the work to avoid huge payloads for very large repos.
+    const maxSymbols = 250;
+
+    let count = 0;
+    for (const file of catalog.files) {
+        const list = catalog.symbolsByFile[file.relPath] || [];
+        for (const item of list) {
+            if (!item.viewId || views[item.viewId]) continue;
+
+            const defLabel = `Defined: ${file.relPath}:${item.defLine || 1}`;
+            const stableKey = item.stableKey || `${item.kind}:${item.name}:${file.relPath}:${item.defLine || 1}`;
+            const uses = (scan.symbolUses[stableKey] || []).slice(0, 8);
+
+            const lines: string[] = [];
+            lines.push('flowchart TB');
+            lines.push(`  Sym[${escapeMermaidLabel(`${item.kind}: ${item.name}`)}]`);
+
+            const defNode = toMermaidId(`Def_${hashString(`${file.relPath}:${item.defLine || 1}`)}`);
+            lines.push(`  ${defNode}[${escapeMermaidLabel(defLabel)}]`);
+            lines.push(`  Sym --> ${defNode}`);
+
+            if (uses.length === 0) {
+                const noneId = toMermaidId(`NoUses_${hashString(`${stableKey}:${file.relPath}:${item.defLine || 1}`)}`);
+                lines.push(`  ${noneId}[No usages indexed]`);
+                lines.push(`  Sym --> ${noneId}`);
+            } else {
+                for (let i = 0; i < uses.length; i++) {
+                    const u = uses[i];
+                    const uid = toMermaidId(`Use_${i + 1}_${hashString(`${u.relPath}:${u.line}`)}`);
+                    const uLabel = u.note ? `Used: ${u.relPath}:${u.line} - ${u.note}` : `Used: ${u.relPath}:${u.line}`;
+                    lines.push(`  ${uid}[${escapeMermaidLabel(uLabel)}]`);
+                    lines.push(`  Sym --> ${uid}`);
+                }
+            }
+
+            views[item.viewId] = addClassStyling(lines.join('\n'));
+            navByViewId[item.viewId] = {};
+
+            const open: Record<string, { filePath: string; line: number }> = {};
+            open[defLabel] = { filePath: item.defFilePath, line: item.defLine || 1 };
+            for (const u of uses) {
+                const uLabel = u.note ? `Used: ${u.relPath}:${u.line} - ${u.note}` : `Used: ${u.relPath}:${u.line}`;
+                open[uLabel] = { filePath: u.filePath, line: u.line };
+            }
+            openByViewId[item.viewId] = open;
+
+            count++;
+            if (count >= maxSymbols) return;
+        }
+    }
 }
 
 function hasAny(hints: Set<string>, needles: string[]): boolean {
@@ -1161,6 +1360,8 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     const navByViewId: Record<string, Record<string, string>> = {};
     const openByViewId: MermaidPreview["openByViewId"] = {};
 
+    const catalog = buildCatalog(scan);
+
     // Overview: keep it intentionally high-level for readability, with drill-down navigation.
     const overviewNodes: Array<{ id: string; label: string }> = [
         // Avoid punctuation like parentheses/brackets which can trip Mermaid's parser in node labels.
@@ -1229,7 +1430,11 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     addSymbolsViews(views, navByViewId, openByViewId, scan, 'datastore', 'DB');
     addSymbolsViews(views, navByViewId, openByViewId, scan, 'external', 'EXT');
 
-    return { startViewId: 'overview', views, navByViewId, openByViewId };
+    // The dropdown picker can reference symbols that aren't present in the first-page objects view.
+    // Ensure trace views exist for all cataloged symbols (bounded) so "Trace" never lands on a missing view.
+    addGlobalSymbolViews(views, navByViewId, openByViewId, scan, catalog);
+
+    return { startViewId: 'overview', views, navByViewId, openByViewId, catalog };
 }
 
 function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string, rootId: string, labelPrefix: string): string {
@@ -1448,11 +1653,14 @@ function openMermaidPreview(preview: MermaidPreview) {
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net;">
             <style>
                 body { background: #ffffff; margin: 0; padding: 0; overflow: hidden; height: 100vh; width: 100vw; font-family: sans-serif; }
-                #controls { position: absolute; top: 10px; left: 10px; z-index: 100; background: white; padding: 10px; border: 1px solid #ccc; border-radius: 4px; display: flex; gap: 8px; align-items: center; }
+                #controls { position: absolute; top: 10px; left: 10px; z-index: 100; background: white; padding: 10px; border: 1px solid #ccc; border-radius: 4px; display: flex; gap: 10px; align-items: center; max-width: 1100px; }
                 #backBtn { border: 1px solid #ccc; background: #f8fafc; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
                 #backBtn[disabled] { opacity: 0.5; cursor: default; }
                 #title { font-weight: 700; font-size: 12px; }
                 #hint { font-size: 12px; color: #475569; }
+                #picker { display: flex; gap: 8px; align-items: center; }
+                #picker select { font-size: 12px; padding: 4px 6px; max-width: 360px; }
+                #picker button { border: 1px solid #ccc; background: #f8fafc; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
                 #diagram-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
                 svg { width: 100% !important; height: 100% !important; }
                 .clickable { cursor: pointer; }
@@ -1464,6 +1672,16 @@ function openMermaidPreview(preview: MermaidPreview) {
                 <div>
                     <div id="title">@mapper Visualizer</div>
                     <div id="hint">Click a section to expand. Scroll to Zoom. Drag to Pan.</div>
+                </div>
+                <div id="picker" title="Jump to a specific object and trace where it is used">
+                    <select id="fileSelect">
+                        <option value="">File...</option>
+                    </select>
+                    <select id="symbolSelect" disabled>
+                        <option value="">Object...</option>
+                    </select>
+                    <button id="traceBtn" disabled>Trace</button>
+                    <button id="openBtn" disabled>Open File</button>
                 </div>
             </div>
             <div id="diagram-container">
@@ -1477,6 +1695,10 @@ function openMermaidPreview(preview: MermaidPreview) {
                 const titleEl = document.getElementById('title');
                 const hintEl = document.getElementById('hint');
                 const vscode = acquireVsCodeApi();
+                const fileSelect = document.getElementById('fileSelect');
+                const symbolSelect = document.getElementById('symbolSelect');
+                const traceBtn = document.getElementById('traceBtn');
+                const openBtn = document.getElementById('openBtn');
 
                 function showError(message) {
                     container.innerHTML = "<div style='color:red; padding:20px; max-width: 900px;'><b>Render Error:</b><br/>" + message + "</div>";
@@ -1493,9 +1715,72 @@ function openMermaidPreview(preview: MermaidPreview) {
                         const views = payload.views || {};
                         const navByViewId = payload.navByViewId || {};
                         const openByViewId = payload.openByViewId || {};
+                        const catalog = payload.catalog || { files: [], symbolsByFile: {} };
                         let currentViewId = payload.startViewId || 'overview';
                         const stack = [];
                         let panZoomInstance = null;
+                        let selectedFile = null;
+                        let selectedSymbol = null;
+
+                        function clearSelect(selectEl, placeholder) {
+                            selectEl.innerHTML = '';
+                            const opt = document.createElement('option');
+                            opt.value = '';
+                            opt.textContent = placeholder;
+                            selectEl.appendChild(opt);
+                        }
+
+                        function populateFileSelect() {
+                            clearSelect(fileSelect, 'File...');
+                            const files = (catalog.files || []).slice().sort((a, b) => (a.relPath || '').localeCompare(b.relPath || ''));
+                            for (const f of files) {
+                                const opt = document.createElement('option');
+                                opt.value = f.relPath;
+                                // Avoid nested template literals inside the outer webview HTML template string.
+                                opt.textContent = f.relPath + "  (C" + f.classCount + " F" + f.functionCount + " V" + f.variableCount + ")";
+                                opt.dataset.filePath = f.filePath;
+                                fileSelect.appendChild(opt);
+                            }
+                        }
+
+                        function populateSymbolSelect(relPath) {
+                            clearSelect(symbolSelect, 'Object...');
+                            const list = (catalog.symbolsByFile && catalog.symbolsByFile[relPath]) ? catalog.symbolsByFile[relPath] : [];
+                            if (!list.length) {
+                                symbolSelect.disabled = true;
+                                traceBtn.disabled = true;
+                                return;
+                            }
+
+                            // Group by kind.
+                            const kinds = { class: [], function: [], variable: [] };
+                            for (const s of list) {
+                                if (kinds[s.kind]) kinds[s.kind].push(s);
+                            }
+
+                            const addGroup = (label, items) => {
+                                if (!items.length) return;
+                                items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                                const og = document.createElement('optgroup');
+                                og.label = label;
+                                for (const s of items) {
+                                    const opt = document.createElement('option');
+                                    opt.value = s.viewId;
+                                    // Avoid nested template literals inside the outer webview HTML template string.
+                                    opt.textContent = s.kind + ": " + s.name;
+                                    opt.dataset.defFilePath = s.defFilePath;
+                                    opt.dataset.defLine = String(s.defLine || 1);
+                                    og.appendChild(opt);
+                                }
+                                symbolSelect.appendChild(og);
+                            };
+
+                            addGroup('Classes', kinds.class);
+                            addGroup('Functions', kinds.function);
+                            addGroup('Variables', kinds.variable);
+
+                            symbolSelect.disabled = false;
+                        }
 
                         async function renderView(viewId, pushStack) {
                             const code = views[viewId];
@@ -1646,6 +1931,34 @@ function openMermaidPreview(preview: MermaidPreview) {
                             const prev = stack.pop();
                             renderView(prev, false).catch((err) => showError(err.message || String(err)));
                         });
+
+                        fileSelect.addEventListener('change', () => {
+                            selectedFile = fileSelect.value || null;
+                            selectedSymbol = null;
+                            populateSymbolSelect(selectedFile);
+                            traceBtn.disabled = true;
+                            openBtn.disabled = !selectedFile;
+                        });
+
+                        symbolSelect.addEventListener('change', () => {
+                            selectedSymbol = symbolSelect.value || null;
+                            traceBtn.disabled = !selectedSymbol;
+                        });
+
+                        traceBtn.addEventListener('click', () => {
+                            if (!selectedSymbol) return;
+                            renderView(selectedSymbol, true).catch((err) => showError(err.message || String(err)));
+                        });
+
+                        openBtn.addEventListener('click', () => {
+                            if (!selectedFile) return;
+                            const opt = fileSelect.selectedOptions && fileSelect.selectedOptions[0];
+                            const fp = opt ? opt.dataset.filePath : null;
+                            if (!fp) return;
+                            vscode.postMessage({ type: 'open', filePath: fp, line: 1 });
+                        });
+
+                        populateFileSelect();
 
                         await renderView(currentViewId, false);
                     } catch (e) {
