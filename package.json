@@ -28,6 +28,18 @@
             "description": "Visualize the project's architecture with a Mermaid diagram."
           },
           {
+            "name": "trace",
+            "description": "Trace where a symbol is defined and referenced across the codebase."
+          },
+          {
+            "name": "path",
+            "description": "Trace a request path from route to handler to DB/external calls."
+          },
+          {
+            "name": "config",
+            "description": "Show configuration flow: env keys to settings to clients."
+          },
+          {
             "name": "explain",
             "description": "Explain the role of the currently open file in the architecture."
           }
@@ -45,7 +57,8 @@
     "vscode:prepublish": "node esbuild.js",
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
-    "package": "node esbuild.js --production"
+    "package": "node esbuild.js --production",
+    "test": "npx ts-node src/test/mermaid.test.ts && npx ts-node src/test/frameworkDetectors.test.ts"
   },
   "devDependencies": {
     "@types/node": "18.x",

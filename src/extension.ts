@@ -1,8 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { getCachedScan, setCachedScan, invalidateCache, initCacheWatcher } from './scanCache';
+import { getSymbolsForFile, getReferencesForSymbol, getDefinitionLocation } from './symbolIndex';
+import { detectFrameworkRegistrations, detectActiveFrameworks, FrameworkRegistration } from './frameworkDetectors';
+import { buildModuleGraph, buildModuleGraphMermaid } from './moduleGraph';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('@mapper is now active!');
+
+    // Initialize scan cache file watcher.
+    context.subscriptions.push(initCacheWatcher());
 
     const resetCommand = vscode.commands.registerCommand('mapper.resetApiKey', async () => {
         await context.secrets.delete("GEMINI_API_KEY");
@@ -21,10 +28,14 @@ export function activate(context: vscode.ExtensionContext) {
             if (!workspaceFolders) return;
 
             const rootPath = workspaceFolders[0].uri.fsPath;
-            // const fileTree = await getFileTree(rootPath);
 
             try {
-                const scan = await scanWorkspace(rootPath);
+                // Use cached scan if available, otherwise scan fresh.
+                let scan = getCachedScan(rootPath);
+                if (!scan) {
+                    scan = await scanWorkspace(rootPath);
+                    setCachedScan(rootPath, scan);
+                }
                 const preview = buildPreviewFromScan(scan);
                 openMermaidPreview(preview, rootPath);
 
@@ -34,7 +45,123 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        response.markdown("👋 I am **@mapper**. Try `/draw`!");
+        if (request.command === 'trace') {
+            const symbolName = (request.prompt || '').trim();
+            if (!symbolName) {
+                response.markdown('Usage: `@mapper /trace <symbolName>` — traces where a symbol is defined and referenced.');
+                return;
+            }
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) return;
+            const rootPath = workspaceFolders[0].uri.fsPath;
+
+            response.markdown(`🔍 Tracing **${symbolName}**...\n\n`);
+            try {
+                let scan = getCachedScan(rootPath);
+                if (!scan) {
+                    scan = await scanWorkspace(rootPath);
+                    setCachedScan(rootPath, scan);
+                }
+                // Find symbol in scan results.
+                const sym = scan.symbols.find((s: any) => s.name === symbolName);
+                if (!sym) {
+                    response.markdown(`⚠️ Symbol **${symbolName}** not found in the current scan. Run \`/draw\` first, then try again.`);
+                    return;
+                }
+                const refs = await getReferencesForSymbol(rootPath, sym.filePath, sym.line, 0);
+                response.markdown(`📌 **Defined in:** \`${sym.relPath}:${sym.line}\`\n\n`);
+                if (refs.length === 0) {
+                    response.markdown('No cross-file references found.');
+                } else {
+                    response.markdown(`**Referenced in ${refs.length} location(s):**\n`);
+                    for (const r of refs) {
+                        response.markdown(`- \`${r.relPath}:${r.line}\` ${r.note || ''}\n`);
+                    }
+                }
+            } catch (err: any) {
+                response.markdown(`❌ Error: ${err.message}`);
+            }
+            return;
+        }
+
+        if (request.command === 'path') {
+            const routeQuery = (request.prompt || '').trim();
+            if (!routeQuery) {
+                response.markdown('Usage: `@mapper /path <route>` — traces a request from route decorator to handler to DB/external calls.\n\nExample: `@mapper /path /api/users`');
+                return;
+            }
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) return;
+            const rootPath = workspaceFolders[0].uri.fsPath;
+
+            response.markdown(`🛤️ Tracing request path for **${routeQuery}**...\n\n`);
+            try {
+                let scan = getCachedScan(rootPath);
+                if (!scan) {
+                    scan = await scanWorkspace(rootPath);
+                    setCachedScan(rootPath, scan);
+                }
+                const regs: FrameworkRegistration[] = scan.frameworkRegistrations || [];
+                const matching = regs.filter(r => r.kind === 'route' && r.name.toLowerCase().includes(routeQuery.toLowerCase()));
+                if (matching.length === 0) {
+                    response.markdown(`⚠️ No routes matching **${routeQuery}** found. Make sure the project has been scanned with \`/draw\` first.`);
+                    return;
+                }
+                for (const route of matching) {
+                    response.markdown(`### ${route.name}\n`);
+                    response.markdown(`📍 **Defined in:** \`${route.relPath}:${route.line}\`\n`);
+                    if (route.meta) response.markdown(`🏷️ Method: \`${route.meta}\`\n`);
+                    // Try to trace deeper: find the handler function and its dependencies.
+                    const refs = await getReferencesForSymbol(rootPath, route.filePath, route.line, 0);
+                    if (refs.length > 0) {
+                        response.markdown(`\n**Calls / References:**\n`);
+                        for (const r of refs.slice(0, 10)) {
+                            response.markdown(`- \`${r.relPath}:${r.line}\`\n`);
+                        }
+                    }
+                    response.markdown('\n---\n');
+                }
+            } catch (err: any) {
+                response.markdown(`❌ Error: ${err.message}`);
+            }
+            return;
+        }
+
+        if (request.command === 'config') {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) return;
+            const rootPath = workspaceFolders[0].uri.fsPath;
+
+            response.markdown('🔧 **Configuration Flow Analysis**\n\n');
+            try {
+                // Find .env files.
+                const envUris = await vscode.workspace.findFiles(
+                    new vscode.RelativePattern(rootPath, '**/.env*'),
+                    '**/node_modules/**',
+                    10
+                );
+                if (envUris.length === 0) {
+                    response.markdown('No `.env` files found in the workspace.');
+                    return;
+                }
+                for (const uri of envUris) {
+                    const rel = path.relative(rootPath, uri.fsPath).replace(/\\/g, '/');
+                    const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+                    const keys = parseDotEnvKeys(text);
+                    response.markdown(`### ${rel}\n`);
+                    response.markdown(`Found **${keys.length}** env key(s):\n`);
+                    for (const k of keys.slice(0, 30)) {
+                        response.markdown(`- \`${k}\`\n`);
+                    }
+                    response.markdown('\n');
+                }
+            } catch (err: any) {
+                response.markdown(`❌ Error: ${err.message}`);
+            }
+            return;
+        }
+
+        response.markdown("👋 I am **@mapper**. Try `/draw`, `/trace <symbol>`, `/path <route>`, or `/config`!");
     });
 
     context.subscriptions.push(mapper);
@@ -157,6 +284,7 @@ interface WorkspaceScan {
     detailsByKind: Record<ScanNodeKind, Array<{ label: string; relPath?: string; filePath?: string }>>;
     symbols: SymbolDef[];
     symbolUses: Record<string, SymbolUse[]>; // key = stable symbol key
+    frameworkRegistrations: FrameworkRegistration[];
 }
 
 interface MermaidPreview {
@@ -661,7 +789,21 @@ async function scanWorkspace(rootPath: string): Promise<WorkspaceScan> {
 
     // Symbol tracing is handled lazily via VS Code's reference provider in the webview.
 
-    return { nodes, edges, notes, detailsByKind, symbols, symbolUses };
+    // Framework-specific registration detection.
+    const activeFrameworks = detectActiveFrameworks(depHints);
+    let frameworkRegistrations: FrameworkRegistration[] = [];
+    if (activeFrameworks.size > 0) {
+        // Collect all scanned source file URIs for framework detection.
+        const allSourceUris = await vscode.workspace.findFiles(
+            new vscode.RelativePattern(rootPath, '**/*.{py,ts,tsx,js,jsx}'),
+            '**/{node_modules,dist,out,.next,build,coverage,.turbo,venv,.venv,__pycache__,.history,.git}/**',
+            300
+        );
+        frameworkRegistrations = await detectFrameworkRegistrations(rootPath, allSourceUris, activeFrameworks);
+        notes.push(`Framework detection found ${frameworkRegistrations.length} registrations across ${activeFrameworks.size} framework(s): ${Array.from(activeFrameworks).join(', ')}.`);
+    }
+
+    return { nodes, edges, notes, detailsByKind, symbols, symbolUses, frameworkRegistrations };
 }
 
 function inferKindFromPackage(pkg: { dirName: string; deps: Set<string> }): ScanNodeKind {
