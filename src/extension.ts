@@ -1104,7 +1104,7 @@ function addSymbolsViews(
     const viewId = `objects_${sectionKind}`;
     const lines: string[] = [];
     lines.push('flowchart TB');
-    lines.push(`  Root[Objects in ${escapeMermaidLabel(sectionKind)}]`);
+    lines.push(`  Root[🔍 Symbols in ${escapeMermaidLabel(sectionKind)}]`);
 
     const sectionFiles = new Set((scan.detailsByKind[sectionKind] || []).map((d) => d.filePath).filter(Boolean) as string[]);
     const sectionSymbols = scan.symbols
@@ -1118,7 +1118,7 @@ function addSymbolsViews(
         .slice(0, 40);
 
     if (sectionSymbols.length === 0) {
-        lines.push('  Root --> Empty[No objects detected]');
+        lines.push('  Root --> Empty[No symbols detected]');
         views[viewId] = addClassStyling(lines.join('\n'));
         navByViewId[viewId] = {};
         openByViewId[viewId] = {};
@@ -1128,7 +1128,7 @@ function addSymbolsViews(
     const nav: Record<string, string> = {};
     const open: Record<string, { filePath: string; line: number }> = {};
 
-    // Arrange objects by file first. This keeps the first drill-down readable even for large repos.
+    // Group symbols by file for organized display.
     const byFile = new Map<string, SymbolDef[]>();
     for (const s of sectionSymbols) {
         const arr = byFile.get(s.relPath) || [];
@@ -1136,59 +1136,58 @@ function addSymbolsViews(
         byFile.set(s.relPath, arr);
     }
 
-    const files = Array.from(byFile.keys()).sort((a, b) => a.localeCompare(b)).slice(0, 30);
-    const groups = new Map<string, string[]>();
+    const files = Array.from(byFile.keys()).sort((a, b) => a.localeCompare(b)).slice(0, 12);
+
+    let fileIdx = 0;
     for (const relPath of files) {
-        const dir = relPath.includes('/') ? relPath.split('/').slice(0, -1).join('/') : 'root';
-        const list = groups.get(dir) || [];
-        list.push(relPath);
-        groups.set(dir, list);
-    }
+        fileIdx++;
+        const defs = byFile.get(relPath) || [];
+        const fileName = relPath.includes('/') ? relPath.split('/').pop() || relPath : relPath;
+        const fileSubgraphId = toMermaidId(`ObjFile_${fileIdx}`);
 
-    lines.push('  Files[Files]');
-    lines.push('  Root --> Files');
-    lines.push('  subgraph FileGroups[By File]');
-    lines.push('    direction TB');
+        lines.push(`  subgraph ${fileSubgraphId}[📄 ${escapeMermaidLabel(fileName)}]`);
+        lines.push('    direction TB');
 
-    const dirNames = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b)).slice(0, 10);
-    let dirIndex = 0;
-    for (const dirName of dirNames) {
-        dirIndex++;
-        const dirId = toMermaidId(`Dir_${dirIndex}`);
-        lines.push(`    subgraph ${dirId}[${escapeMermaidLabel(dirName)}]`);
-        lines.push('      direction TB');
+        const shownDefs = defs.slice(0, 10);
+        const symNodeIds: string[] = [];
+        for (let i = 0; i < shownDefs.length; i++) {
+            const s = shownDefs[i];
+            const icon = s.kind === 'class' ? '🏷️' : s.kind === 'function' ? '⚡' : '📦';
+            const nodeId = toMermaidId(`Obj_${fileIdx}_${i + 1}`);
+            symNodeIds.push(nodeId);
+            lines.push(`    ${nodeId}[${escapeMermaidLabel(`${icon} ${s.name}`)}]`);
 
-        const rels = (groups.get(dirName) || []).slice(0, 12);
-        const fileNodeIds: string[] = [];
-        for (let i = 0; i < rels.length; i++) {
-            const rel = rels[i];
-            const defs = byFile.get(rel) || [];
-            const counts = countKinds(defs);
-            const label = `${rel} C${counts.classCount} F${counts.functionCount} V${counts.variableCount}`;
-            const nodeId = toMermaidId(`File_${hashString(rel)}`);
-            fileNodeIds.push(nodeId);
-            lines.push(`      ${nodeId}[${escapeMermaidLabel(label)}]`);
-
-            const fileViewId = `file_${hashString(`${sectionKind}:${rel}`)}`;
-            nav[label] = fileViewId;
-
-            // Click-to-open raw file (best effort). The label must match what we render.
-            const anyDef = defs[0];
-            if (anyDef) open[label] = { filePath: anyDef.filePath, line: 1 };
-
-            // Build per-file view now.
-            buildFileSymbolsView(views, navByViewId, openByViewId, scan, sectionKind, prefix, rel, defs, fileViewId);
+            // Make each symbol clickable to trace.
+            const fileViewId = `file_${hashString(`${sectionKind}:${relPath}`)}`;
+            nav[`${icon} ${s.name}`] = fileViewId;
+            open[`${icon} ${s.name}`] = { filePath: s.filePath, line: s.line };
         }
 
-        // Chain within the directory to force vertical list layout.
-        for (let i = 0; i < fileNodeIds.length - 1; i++) {
-            lines.push(`      ${fileNodeIds[i]} --> ${fileNodeIds[i + 1]}`);
+        // Chain symbols vertically.
+        for (let i = 0; i < symNodeIds.length - 1; i++) {
+            lines.push(`    ${symNodeIds[i]} --> ${symNodeIds[i + 1]}`);
         }
 
-        lines.push('    end');
+        if (defs.length > shownDefs.length) {
+            const moreId = toMermaidId(`ObjMore_${fileIdx}`);
+            lines.push(`    ${moreId}[+${defs.length - shownDefs.length} more]`);
+            lines.push(`    style ${moreId} fill:none,stroke:none,color:#64748b,font-size:11px`);
+        }
+
+        lines.push('  end');
+        lines.push(`  Root --> ${fileSubgraphId}`);
+
+        // Build per-file view.
+        const fileViewId = `file_${hashString(`${sectionKind}:${relPath}`)}`;
+        buildFileSymbolsView(views, navByViewId, openByViewId, scan, sectionKind, prefix, relPath, defs, fileViewId);
     }
 
-    lines.push('  end');
+    if (byFile.size > files.length) {
+        const moreFilesId = toMermaidId(`ObjMoreFiles`);
+        lines.push(`  ${moreFilesId}[+${byFile.size - files.length} more files]`);
+        lines.push(`  Root --> ${moreFilesId}`);
+        lines.push(`  style ${moreFilesId} fill:none,stroke:none,color:#64748b,font-size:11px`);
+    }
 
     views[viewId] = addClassStyling(lines.join('\n'));
     navByViewId[viewId] = nav;
@@ -1398,6 +1397,9 @@ async function buildSymbolTraceViewFromPosition(
     const maxUses = 14;
     const trimmed = uses.slice(0, maxUses);
 
+    const sameFileIds: string[] = [];
+    const crossFileIds: string[] = [];
+
     const sv: string[] = [];
     sv.push('flowchart TB');
     sv.push(`  Sym[${escapeMermaidLabel(`${kind}: ${name}`)}]`);
@@ -1418,8 +1420,38 @@ async function buildSymbolTraceViewFromPosition(
             const uLabel = u.note ? `Used: ${u.relPath}:${u.line} - ${u.note}` : `Used: ${u.relPath}:${u.line}`;
             sv.push(`  ${uid}[${escapeMermaidLabel(uLabel)}]`);
             sv.push(`  Sym --> ${uid}`);
+            // Classify as same-file or cross-file.
+            if (u.filePath === filePath) {
+                sameFileIds.push(uid);
+            } else {
+                crossFileIds.push(uid);
+            }
         }
     }
+
+    // Color-coding styles.
+    // Definition node: blue
+    sv.push(`  style Sym fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a5f,font-weight:bold`);
+    sv.push(`  style ${defNode} fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px,color:#312e81`);
+    // Same-file references: green
+    for (const id of sameFileIds) {
+        sv.push(`  style ${id} fill:#bbf7d0,stroke:#16a34a,stroke-width:2px,color:#064e3b`);
+    }
+    // Cross-file references: orange/amber
+    for (const id of crossFileIds) {
+        sv.push(`  style ${id} fill:#fed7aa,stroke:#ea580c,stroke-width:2px,color:#7c2d12`);
+    }
+
+    // Legend.
+    sv.push(`  subgraph Legend[🎨 Legend]`);
+    sv.push(`    direction LR`);
+    sv.push(`    L1[Same-file reference]`);
+    sv.push(`    L2[Cross-file reference]`);
+    sv.push(`    L3[Definition]`);
+    sv.push(`    style L1 fill:#bbf7d0,stroke:#16a34a,stroke-width:2px,color:#064e3b`);
+    sv.push(`    style L2 fill:#fed7aa,stroke:#ea580c,stroke-width:2px,color:#7c2d12`);
+    sv.push(`    style L3 fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px,color:#312e81`);
+    sv.push(`  end`);
 
     const openMap: Record<string, { filePath: string; line: number }> = {};
     openMap[defLabel] = { filePath, line: defLine };
@@ -2140,16 +2172,40 @@ function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string
     lines.push('flowchart TB');
     lines.push(`  ${rootId}[${escapeMermaidLabel(title)}]`);
 
-    const details = scan.detailsByKind[kind] || [];
+    const rawDetails = scan.detailsByKind[kind] || [];
+
+    // Filter out build artifacts, chunks, vendored, generated files.
+    const NOISE_PATTERNS = [
+        /\.chunk\.\w+$/i,          // Webpack chunks
+        /\.min\.\w+$/i,            // Minified files
+        /\.map$/i,                 // Sourcemaps
+        /\.bundle\.\w+$/i,         // Bundled files
+        /\.compiled\.\w+$/i,       // Compiled output
+        /\.generated\.\w+$/i,      // Generated files
+        /[\\/]dist[\\/]/i,         // dist/ folder
+        /[\\/]build[\\/]/i,        // build/ folder
+        /[\\/]\.next[\\/]/i,       // Next.js build
+        /[\\/]out[\\/]/i,          // out/ folder
+        /[\\/]coverage[\\/]/i,     // coverage reports
+        /[\\/]__pycache__[\\/]/i,  // Python cache
+        /[\\/]\.history[\\/]/i,    // History files
+        /[\\/]node_modules[\\/]/i, // Dependencies
+        /[\\/]venv[\\/]/i,         // Virtual env
+        /[\\/]\.venv[\\/]/i,       // Virtual env
+        /package-lock\.json$/i,    // Lock files
+        /yarn\.lock$/i,
+        /pnpm-lock\.yaml$/i,
+    ];
+
+    const details = rawDetails.filter(d => {
+        const label = (d.label || d.relPath || '').replace(/\\/g, '/');
+        return !NOISE_PATTERNS.some(p => p.test(label));
+    });
+
     if (details.length === 0) {
-        lines.push(`  ${rootId} --> Empty[No ${escapeMermaidLabel(title)} items detected]`);
+        lines.push(`  ${rootId} --> Empty[No ${escapeMermaidLabel(title)} source files detected]`);
         return lines.join('\n');
     }
-
-    // Add an "Objects" entrypoint for symbol-level drill-down.
-    const objectsId = toMermaidId(`${rootId}_Objects`);
-    lines.push(`  ${objectsId}([🔍 Objects: where defined and used])`);
-    lines.push(`  ${rootId} --> ${objectsId}`);
 
     // Group by top-level directory to avoid one gigantic horizontal row.
     const groups = new Map<string, Array<{ rel: string; fileName: string }>>();
@@ -2163,7 +2219,7 @@ function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string
     }
 
     const groupNames = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b));
-    const maxGroups = 10;
+    const maxGroups = 6;
     const shownGroups = groupNames.slice(0, maxGroups);
     const hiddenGroups = groupNames.length - shownGroups.length;
 
@@ -2175,14 +2231,12 @@ function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string
         lines.push(`  subgraph ${groupId}[📂 ${escapeMermaidLabel(groupName)}]`);
         lines.push('    direction TB');
 
-        const items = (groups.get(groupName) || []).slice(0, 20);
+        const items = (groups.get(groupName) || []).slice(0, 8);
         const nodeIds: string[] = [];
         for (let i = 0; i < items.length; i++) {
             const id = toMermaidId(`${rootId}_${groupIndex}_${i + 1}`);
             nodeIds.push(id);
-            // Show filename as main label, full path as tooltip via the label prefix.
-            const label = `${labelPrefix} ${items[i].fileName}`;
-            lines.push(`    ${id}[${escapeMermaidLabel(label)}]`);
+            lines.push(`    ${id}[${escapeMermaidLabel(items[i].fileName)}]`);
         }
 
         // Chain nodes vertically for cleaner layout within each group.
@@ -2204,7 +2258,7 @@ function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string
 
     if (hiddenGroups > 0) {
         const moreGroupsId = toMermaidId(`${rootId}_more_groups`);
-        lines.push(`  ${rootId} --> ${moreGroupsId}[${escapeMermaidLabel(`+${hiddenGroups} more groups...`)}]`);
+        lines.push(`  ${rootId} --> ${moreGroupsId}[${escapeMermaidLabel(`+${hiddenGroups} more folders...`)}]`);
     }
 
     return lines.join('\n');
