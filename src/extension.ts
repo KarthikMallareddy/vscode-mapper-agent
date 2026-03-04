@@ -1454,9 +1454,13 @@ async function buildSymbolTraceViewFromPosition(
     sv.push(`  end`);
 
     const openMap: Record<string, { filePath: string; line: number }> = {};
+    openMap[defNode] = { filePath, line: defLine };
     openMap[defLabel] = { filePath, line: defLine };
-    for (const u of trimmed) {
+    for (let i = 0; i < trimmed.length; i++) {
+        const u = trimmed[i];
+        const uid = toMermaidId(`Use_${i + 1}_${hashString(`${u.relPath}:${u.line}`)}`);
         const uLabel = u.note ? `Used: ${u.relPath}:${u.line} - ${u.note}` : `Used: ${u.relPath}:${u.line}`;
+        openMap[uid] = { filePath: u.filePath, line: u.line };
         openMap[uLabel] = { filePath: u.filePath, line: u.line };
     }
 
@@ -2139,22 +2143,26 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     navByViewId.overview = nav;
     openByViewId.overview = {};
 
+    // Initialize open maps BEFORE calling buildSectionView so the Mermaid node IDs
+    // are populated inside buildSectionView, then merge with buildOpenMapForDetails.
+    openByViewId.frontend = buildOpenMapForDetails(scan, 'frontend');
+    openByViewId.backend = buildOpenMapForDetails(scan, 'backend');
+    openByViewId.datastore = buildOpenMapForDetails(scan, 'datastore');
+    openByViewId.external = buildOpenMapForDetails(scan, 'external');
+
     // Drill-down views: show the concrete nodes found for each section.
-    views.frontend = addClassStyling(buildSectionView(scan, 'frontend', 'Frontend', 'Frontend', 'UI:'));
-    views.backend = addClassStyling(buildSectionView(scan, 'backend', 'Backend/API', 'Backend', 'API:'));
-    views.datastore = addClassStyling(buildSectionView(scan, 'datastore', 'Data Store', 'DataStore', 'DB:'));
-    views.external = addClassStyling(buildSectionView(scan, 'external', 'External', 'External', 'EXT:'));
+    // buildSectionView adds Mermaid node ID keys (e.g. Backend_1_1) into the openMap,
+    // which wireClickableNodes needs to match SVG nodes to file-open actions.
+    views.frontend = addClassStyling(buildSectionView(scan, 'frontend', 'Frontend', 'Frontend', 'UI:', openByViewId.frontend));
+    views.backend = addClassStyling(buildSectionView(scan, 'backend', 'Backend/API', 'Backend', 'API:', openByViewId.backend));
+    views.datastore = addClassStyling(buildSectionView(scan, 'datastore', 'Data Store', 'DataStore', 'DB:', openByViewId.datastore));
+    views.external = addClassStyling(buildSectionView(scan, 'external', 'External', 'External', 'EXT:', openByViewId.external));
 
     // No special navigation inside section views for now.
     navByViewId.frontend = buildSymbolsNav(scan, 'frontend');
     navByViewId.backend = buildSymbolsNav(scan, 'backend');
     navByViewId.datastore = buildSymbolsNav(scan, 'datastore');
     navByViewId.external = buildSymbolsNav(scan, 'external');
-
-    openByViewId.frontend = buildOpenMapForDetails(scan, 'frontend');
-    openByViewId.backend = buildOpenMapForDetails(scan, 'backend');
-    openByViewId.datastore = buildOpenMapForDetails(scan, 'datastore');
-    openByViewId.external = buildOpenMapForDetails(scan, 'external');
 
     // Symbols views per section (click "Objects" to navigate).
     addSymbolsViews(views, navByViewId, openByViewId, scan, 'frontend', 'UI');
@@ -2167,7 +2175,14 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     return { startViewId: 'overview', views, navByViewId, openByViewId, catalog };
 }
 
-function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string, rootId: string, labelPrefix: string): string {
+function buildSectionView(
+    scan: WorkspaceScan,
+    kind: ScanNodeKind,
+    title: string,
+    rootId: string,
+    labelPrefix: string,
+    openMap?: Record<string, { filePath: string; line: number }>
+): string {
     const lines: string[] = [];
     lines.push('flowchart TB');
     lines.push(`  ${rootId}[${escapeMermaidLabel(title)}]`);
@@ -2208,13 +2223,13 @@ function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string
     }
 
     // Group by top-level directory to avoid one gigantic horizontal row.
-    const groups = new Map<string, Array<{ rel: string; fileName: string }>>();
+    const groups = new Map<string, Array<{ rel: string; fileName: string; filePath?: string }>>();
     for (const d of details) {
         const rel = d.label.replace(/\\/g, '/');
         const top = rel.includes('/') ? rel.split('/')[0] : '(root)';
         const fileName = rel.includes('/') ? rel.split('/').pop() || rel : rel;
         const list = groups.get(top) || [];
-        list.push({ rel, fileName });
+        list.push({ rel, fileName, filePath: d.filePath });
         groups.set(top, list);
     }
 
@@ -2237,6 +2252,12 @@ function buildSectionView(scan: WorkspaceScan, kind: ScanNodeKind, title: string
             const id = toMermaidId(`${rootId}_${groupIndex}_${i + 1}`);
             nodeIds.push(id);
             lines.push(`    ${id}[${escapeMermaidLabel(items[i].fileName)}]`);
+
+            // Allow clicking to jump to the file from the details grouping
+            if (openMap && items[i].filePath) {
+                openMap[id] = { filePath: items[i].filePath!, line: 1 };
+                openMap[items[i].fileName] = { filePath: items[i].filePath!, line: 1 };
+            }
         }
 
         // Chain nodes vertically for cleaner layout within each group.

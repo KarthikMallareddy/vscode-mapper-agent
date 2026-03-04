@@ -237,6 +237,7 @@ export function buildModuleGraphMermaid(
             const label = path.basename(n.relPath);
             lines.push(`    ${n.id}[${escapeMermaidLabel(label)}]`);
             openMap[label] = { filePath: n.filePath, line: 1 };
+            openMap[n.id] = { filePath: n.filePath, line: 1 };
         }
         if (groupNodes.length > 25) {
             const moreId = toNodeId(`more_${group}`);
