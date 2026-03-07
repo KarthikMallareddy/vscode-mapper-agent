@@ -42,6 +42,10 @@
           {
             "name": "explain",
             "description": "Explain the role of the currently open file in the architecture."
+          },
+          {
+            "name": "export",
+            "description": "Export the project architecture as an ARCHITECTURE.md file."
           }
         ]
       }

@@ -2191,7 +2191,7 @@ function buildRouteMapView(
             routeIdx++;
             const rid = toMermaidId(`route_${routeIdx}`);
             const method = (r.meta || 'GET').toUpperCase();
-            const handlerPart = r.handlerName ? ` -> ${r.handlerName}` : '';
+            const handlerPart = r.handlerName ? ` → ${r.handlerName}()` : '';
             const label = `${method} ${r.name}${handlerPart}`;
             sv.push(`    ${rid}[${escapeMermaidLabel(label)}]`);
 
@@ -2271,55 +2271,31 @@ async function buildDataFlowForRoute(
         const startIdx = Math.max(0, handlerLine - 1);
         const endIdx = Math.min(lines.length, startIdx + 40); // Scan up to 40 lines of function body.
 
+        const callPattern = /\b([a-zA-Z_]\w*)\s*\(/g;
         const builtins = new Set(['if', 'for', 'while', 'return', 'print', 'raise', 'except', 'try', 'with', 'async', 'await', 'def', 'class', 'import', 'from', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple', 'isinstance', 'type', 'super', 'self', 'True', 'False', 'None', 'not', 'and', 'or', 'in', 'is', 'pass', 'break', 'continue', 'yield', 'const', 'let', 'var', 'function', 'new', 'typeof', 'require', 'console', 'Promise', 'Array', 'Object', 'String', 'Number', 'Boolean', 'Math', 'JSON', 'Error', 'Map', 'Set', 'Date']);
-        const calledFunctions: { name: string, lineIdx: number }[] = [];
-        const seenNames = new Set<string>();
+        const calledFunctions = new Set<string>();
 
         for (let i = startIdx + 1; i < endIdx; i++) {
             const line = lines[i];
             // Stop at the next function/class definition (end of handler body).
             if (/^(?:def |class |async def |export |function )/.test(line.trim()) && i > startIdx + 1) break;
 
-            const callPattern = /\b([a-zA-Z_]\w*)\s*\(/g;
             let m;
             while ((m = callPattern.exec(line)) !== null) {
                 const name = m[1];
                 if (!builtins.has(name) && name !== handlerName && name.length > 1) {
-                    if (!seenNames.has(name)) {
-                        seenNames.add(name);
-                        calledFunctions.push({ name, lineIdx: i });
-                    }
+                    calledFunctions.add(name);
                 }
             }
         }
 
-        const getPlainEnglishName = (fnName: string): string => {
-            const lower = fnName.toLowerCase();
-            if (lower.includes('query') || lower.includes('select') || lower.includes('find') || lower.includes('filter') || lower.includes('get')) return 'Read Database';
-            if (lower.includes('insert') || lower.includes('add') || lower.includes('save') || lower.includes('create')) return 'Save to Database';
-            if (lower.includes('update') || lower.includes('modify')) return 'Update Database';
-            if (lower.includes('delete') || lower.includes('remove')) return 'Delete from Database';
-            if (lower.includes('commit')) return 'Commit Transaction';
-            if (lower.includes('execute')) return 'Execute Query';
-            if (lower.includes('fetch') || lower.includes('request')) return 'Fetch External Data';
-            if (lower.includes('post') || lower.includes('send') || lower.includes('webhook')) return 'Send External Request';
-            if (lower.includes('generate')) return `Generate ${fnName.replace(/generate/i, '').replace(/_/g, ' ')}`;
-            if (lower.includes('validate') || lower.includes('check') || lower.includes('verify')) return `Validate ${fnName.replace(/validate|check|verify/i, '').replace(/_/g, ' ')}`;
-            if (lower === 'depends') return 'Inject Dependencies';
-            if (lower === 'httpexception') return 'Throw Error';
-            return fnName.replace(/_/g, ' '); // simple conversion
-        };
-
         // Resolve each called function using the symbol index.
         let callIdx = 0;
         const maxCalls = 10;
-        let prevNodeId = handlerId;
-
-        for (const call of calledFunctions) {
+        for (const fnName of calledFunctions) {
             if (callIdx >= maxCalls) break;
             callIdx++;
 
-            const fnName = call.name;
             const callId = toMermaidId(`call_${callIdx}`);
 
             // Try to find where this function is defined.
@@ -2328,28 +2304,21 @@ async function buildDataFlowForRoute(
             let defLine = 1;
 
             try {
-                const charIdx = lines[call.lineIdx].indexOf(fnName);
-                const defLoc = await getDefinitionLocation(filePath, call.lineIdx + 1, charIdx);
-                if (defLoc) {
-                    defFilePath = defLoc.filePath;
-                    defLine = defLoc.line;
-                    let defRel = path.relative(rootPath, defLoc.filePath).replace(/\\/g, '/');
-
-                    if (defRel.includes('node_modules/') || defRel.includes('site-packages/') || defRel.includes('packages/')) {
-                        const matched = defRel.match(/(?:node_modules|site-packages|packages)\/([^/]+)/);
-                        if (matched) {
-                            defRel = `📦 ${matched[1]}`;
-                            defInfo = ` · ${defRel}`;
-                        }
-                    } else {
+                // Search in document for the call site to get position, then resolve definition.
+                const callLineIdx = lines.findIndex((l, idx) => idx >= startIdx && l.includes(fnName + '('));
+                if (callLineIdx >= 0) {
+                    const charIdx = lines[callLineIdx].indexOf(fnName);
+                    const defLoc = await getDefinitionLocation(filePath, callLineIdx + 1, charIdx);
+                    if (defLoc) {
+                        defFilePath = defLoc.filePath;
+                        defLine = defLoc.line;
+                        const defRel = path.relative(rootPath, defLoc.filePath).replace(/\\/g, '/');
                         defInfo = ` · ${defRel}:${defLine}`;
                     }
                 }
             } catch { /* ignore */ }
 
-            const plainName = getPlainEnglishName(fnName);
-            const callLabel = `${plainName}${defInfo}`;
-
+            const callLabel = `${fnName}()${defInfo}`;
             // Categorize: DB-related, external-related, or general service call.
             const lowerName = fnName.toLowerCase();
             const isDb = /query|execute|cursor|commit|insert|update|delete|select|find|save|create_all|session|collection|aggregate/.test(lowerName);
@@ -2365,11 +2334,7 @@ async function buildDataFlowForRoute(
                 sv.push(`    ${callId}[⚙️ ${escapeMermaidLabel(callLabel)}]`);
                 sv.push(`    style ${callId} fill:#ddd6fe,stroke:#7c3aed,stroke-width:2px,color:#2e1065`);
             }
-
-            sv.push(`  ${prevNodeId} --> ${callId}`);
-            sv.push(`  click ${callId} "#" "Original: ${fnName}()"`);
-
-            prevNodeId = callId;
+            sv.push(`  ${handlerId} --> ${callId}`);
 
             if (defFilePath) {
                 openMap[callId] = { filePath: defFilePath, line: defLine };
@@ -2377,7 +2342,7 @@ async function buildDataFlowForRoute(
             }
         }
 
-        if (calledFunctions.length === 0) {
+        if (calledFunctions.size === 0) {
             sv.push('  NoCallsFound[No outgoing calls detected in handler body]');
             sv.push('  style NoCallsFound fill:none,stroke:#94a3b8,color:#64748b,stroke-dasharray:4 2');
             sv.push(`  ${handlerId} --> NoCallsFound`);
@@ -2794,10 +2759,8 @@ function escapeMermaidLabel(label: string): string {
     // Mermaid node labels are sensitive to some punctuation. Keep them simple and single-line.
     return label
         .replace(/\r?\n/g, ' ')
-        .replace(/[\[\]\{\}\(\)]/g, ' ')
-        .replace(/[<>`"']/g, ' ')
-        .replace(/→/g, '->')
-        .replace(/·/g, '-')
+        .replace(/[\[\]\{\}]/g, ' ')
+        .replace(/[<>`]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -3134,12 +3097,7 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                         const isDark = document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast');
                         mermaid.initialize({ startOnLoad: false, theme: isDark ? 'dark' : 'neutral' });
 
-                        const bstr = atob('${base64Payload}');
-                        const u8 = new Uint8Array(bstr.length);
-                        for (let i = 0; i < bstr.length; i++) {
-                            u8[i] = bstr.charCodeAt(i);
-                        }
-                        const payload = JSON.parse(new TextDecoder().decode(u8));
+                        const payload = JSON.parse(atob('${base64Payload}'));
                         const views = payload.views || {};
                         const navByViewId = payload.navByViewId || {};
                         const openByViewId = payload.openByViewId || {};

@@ -36,6 +36,8 @@ export interface FrameworkRegistration {
     line: number;
     /** Extra info: HTTP method, blueprint name, session key name, etc. */
     meta?: string;
+    /** The handler function/class name for routes. */
+    handlerName?: string;
 }
 
 // ──────────────────────── Detection Engine ────────────────────────
@@ -89,6 +91,12 @@ function detectFastAPI(text: string, filePath: string, relPath: string, out: Fra
         // Route decorators: @app.get("/path"), @router.post("/path"), etc.
         const routeMatch = line.match(/^\s*@\s*(\w+)\.(get|post|put|delete|patch|options|head|trace|websocket)\s*\(\s*["']([^"']*)/i);
         if (routeMatch) {
+            // Look ahead for the handler function name
+            let handlerName: string | undefined;
+            for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+                const fnMatch = lines[j].match(/^\s*(?:async\s+)?def\s+(\w+)/);
+                if (fnMatch) { handlerName = fnMatch[1]; break; }
+            }
             out.push({
                 framework: 'fastapi',
                 kind: 'route',
@@ -97,6 +105,7 @@ function detectFastAPI(text: string, filePath: string, relPath: string, out: Fra
                 relPath,
                 line: i + 1,
                 meta: routeMatch[2].toUpperCase(),
+                handlerName,
             });
             continue;
         }
@@ -234,6 +243,12 @@ function detectFlask(text: string, filePath: string, relPath: string, out: Frame
         const routeMatch = line.match(/^\s*@\s*(\w+)\.route\s*\(\s*["']([^"']*)/);
         if (routeMatch) {
             const methodsMatch = line.match(/methods\s*=\s*\[([^\]]+)\]/);
+            // Look ahead for the handler function name
+            let handlerName: string | undefined;
+            for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+                const fnMatch = lines[j].match(/^\s*(?:async\s+)?def\s+(\w+)/);
+                if (fnMatch) { handlerName = fnMatch[1]; break; }
+            }
             out.push({
                 framework: 'flask',
                 kind: 'route',
@@ -242,6 +257,7 @@ function detectFlask(text: string, filePath: string, relPath: string, out: Frame
                 relPath,
                 line: i + 1,
                 meta: methodsMatch ? methodsMatch[1].replace(/'/g, '').trim() : 'GET',
+                handlerName,
             });
             continue;
         }
@@ -292,6 +308,8 @@ function detectDjango(text: string, filePath: string, relPath: string, out: Fram
             const pathMatch = line.match(/\b(?:path|re_path)\s*\(\s*["']([^"']*)/);
             if (pathMatch) {
                 const nameMatch = line.match(/name\s*=\s*["']([^"']+)/);
+                // Extract view name: path("url/", views.ViewName.as_view()) or path("url/", view_func)
+                const viewMatch = line.match(/["'][^"']*["']\s*,\s*(?:views?\.)?([A-Za-z_]\w*)/);
                 out.push({
                     framework: 'django',
                     kind: 'urlpattern',
@@ -300,6 +318,7 @@ function detectDjango(text: string, filePath: string, relPath: string, out: Fram
                     relPath,
                     line: i + 1,
                     meta: nameMatch ? nameMatch[1] : undefined,
+                    handlerName: viewMatch ? viewMatch[1] : undefined,
                 });
             }
         }
@@ -349,6 +368,8 @@ function detectExpress(text: string, filePath: string, relPath: string, out: Fra
         if (routeMatch) {
             const obj = routeMatch[1].toLowerCase();
             if (obj === 'app' || obj === 'router' || obj === 'route') {
+                // Try to extract handler name from the same line: app.get("/path", handlerName)
+                const handlerMatch = line.match(/["'][^"']*["']\s*,\s*([A-Za-z_]\w*)/);
                 out.push({
                     framework: 'express',
                     kind: routeMatch[2] === 'use' ? 'middleware' : 'route',
@@ -357,6 +378,7 @@ function detectExpress(text: string, filePath: string, relPath: string, out: Fra
                     relPath,
                     line: i + 1,
                     meta: routeMatch[2].toUpperCase(),
+                    handlerName: handlerMatch ? handlerMatch[1] : undefined,
                 });
             }
         }
@@ -388,6 +410,12 @@ function detectNestJS(text: string, filePath: string, relPath: string, out: Fram
         // Route decorators: @Get("/path"), @Post("/path"), etc.
         const routeMatch = line.match(/^\s*@(Get|Post|Put|Delete|Patch|All)\s*\(\s*["']?([^"')]*)/);
         if (routeMatch) {
+            // Look ahead for the handler method name
+            let handlerName: string | undefined;
+            for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+                const fnMatch = lines[j].match(/^\s*(?:async\s+)?(\w+)\s*\(/);
+                if (fnMatch && !fnMatch[1].startsWith('@')) { handlerName = fnMatch[1]; break; }
+            }
             out.push({
                 framework: 'nestjs',
                 kind: 'route',
@@ -396,6 +424,7 @@ function detectNestJS(text: string, filePath: string, relPath: string, out: Fram
                 relPath,
                 line: i + 1,
                 meta: routeMatch[1].toUpperCase(),
+                handlerName,
             });
             continue;
         }
