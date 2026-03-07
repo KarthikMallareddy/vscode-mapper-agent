@@ -2503,6 +2503,117 @@ function buildDeadCodeView(
     return { mermaid: sv.join('\n'), openMap };
 }
 
+// ──────────────────────── Feature Domains / Subsystems ────────────────────────
+
+function buildSubsystemDomainView(scan: WorkspaceScan): { mermaid: string; openMap: Record<string, { filePath: string; line: number }>; navMap: Record<string, string> } {
+    const lines: string[] = ['flowchart TD'];
+    const openMap: Record<string, { filePath: string; line: number }> = {};
+    const navMap: Record<string, string> = {};
+
+    // Group files by implicit domain based on path or name.
+    const domainKeywords = ['auth', 'user', 'product', 'order', 'payment', 'cart', 'catalog', 'billing', 'admin', 'core', 'shared', 'config', 'dashboard', 'profile', 'api', 'database'];
+
+    // mapping of domain -> array of { label, kind, id, filePath }
+    const domains = new Map<string, Array<{ label: string, kind: ScanNodeKind, id: string, filePath?: string }>>();
+
+    const getDomain = (relPath: string): string => {
+        const lower = relPath.toLowerCase();
+        for (const kw of domainKeywords) {
+            if (lower.includes(kw)) {
+                return kw.charAt(0).toUpperCase() + kw.slice(1);
+            }
+        }
+        return 'General Features';
+    };
+
+    // Filter out noise files to not clutter the domains
+    const NOISE_PATTERNS = [/\.test\./i, /\.spec\./i, /\.chunk\./i, /\.min\./i, /node_modules/i, /venv/i, /__pycache__/i, /dist\//i, /build\//i];
+
+    let nodeIdCounter = 0;
+
+    for (const [kind, items] of Object.entries(scan.detailsByKind)) {
+        if (kind === 'unknown') continue;
+        for (const item of items) {
+            const rel = item.relPath || item.label;
+            if (NOISE_PATTERNS.some(p => p.test(rel))) continue;
+
+            const domain = getDomain(rel);
+            const list = domains.get(domain) || [];
+
+            nodeIdCounter++;
+            const id = 'domNode_' + nodeIdCounter;
+            const fileName = rel.split('/').pop() || rel;
+
+            list.push({ label: fileName, kind: kind as ScanNodeKind, id, filePath: item.filePath });
+            domains.set(domain, list);
+        }
+    }
+
+    let domainCounter = 0;
+    const sortedDomains = Array.from(domains.keys()).sort((a, b) => {
+        if (a === 'General Features') return 1;
+        if (b === 'General Features') return -1;
+        return a.localeCompare(b);
+    });
+
+    for (const domainName of sortedDomains) {
+        let nodes = domains.get(domainName) || [];
+        if (nodes.length === 0) continue;
+
+        domainCounter++;
+        const domId = 'Domain_' + domainCounter;
+
+        lines.push(`  subgraph ${domId}[🧩 ${domainName} Subsystem]`);
+        lines.push('    direction LR');
+
+        // Try to draw internal edges: frontend -> backend -> datastore if they exist within the same domain
+        const frontends = nodes.filter(n => n.kind === 'frontend');
+        const backends = nodes.filter(n => n.kind === 'backend');
+        const datastores = nodes.filter(n => n.kind === 'datastore');
+        const externals = nodes.filter(n => n.kind === 'external');
+
+        for (const n of nodes) {
+            let icon = '📄';
+            if (n.kind === 'frontend') icon = '🖥️';
+            else if (n.kind === 'backend') icon = '⚙️';
+            else if (n.kind === 'datastore') icon = '🗄️';
+            else if (n.kind === 'external') icon = '🌐';
+
+            lines.push(`    ${n.id}[${icon} ${escapeMermaidLabel(n.label)}]`);
+            if (n.kind === 'frontend') lines.push(`    style ${n.id} fill:#bbf7d0,stroke:#059669,color:#064e3b`);
+            if (n.kind === 'backend') lines.push(`    style ${n.id} fill:#ddd6fe,stroke:#7c3aed,color:#2e1065`);
+            if (n.kind === 'datastore') lines.push(`    style ${n.id} fill:#bae6fd,stroke:#0369a1,color:#0c4a6e`);
+            if (n.kind === 'external') lines.push(`    style ${n.id} fill:#fecdd3,stroke:#e11d48,color:#881337`);
+
+            if (n.filePath) {
+                openMap[n.id] = { filePath: n.filePath, line: 1 };
+                openMap[`${icon} ${n.label}`] = { filePath: n.filePath, line: 1 };
+            }
+        }
+
+        // Draw some logical flow inside the domain
+        for (const f of frontends) {
+            for (const b of backends) lines.push(`    ${f.id} --> ${b.id}`);
+            if (backends.length === 0) {
+                for (const d of datastores) lines.push(`    ${f.id} --> ${d.id}`);
+                for (const x of externals) lines.push(`    ${f.id} --> ${x.id}`);
+            }
+        }
+        for (const b of backends) {
+            for (const d of datastores) lines.push(`    ${b.id} --> ${d.id}`);
+            for (const x of externals) lines.push(`    ${b.id} --> ${x.id}`);
+        }
+
+        lines.push('  end');
+    }
+
+    if (domainCounter === 0) {
+        lines.push('  Empty[No subdomains detected]');
+    }
+
+    return { mermaid: addClassStyling(lines.join('\n')), openMap, navMap };
+}
+
 function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     const views: Record<string, string> = {};
     const navByViewId: Record<string, Record<string, string>> = {};
@@ -2550,6 +2661,10 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
         }
         overviewLines.push('  end');
     }
+
+    // Subdomains Node Link
+    overviewLines.push('  Domains([🧩 Subsystems / Domains])');
+    overviewLines.push('  style Domains fill:#cffafe,stroke:#06b6d4,stroke-width:2px,color:#164e63,font-weight:bold');
 
     // Second-level map (lazy-built): folder/module import graph.
     overviewLines.push('  Modules([📁 Modules])');
@@ -2609,6 +2724,8 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     }
     nav.Modules = 'modules';
     nav['Modules'] = 'modules';
+    nav.Domains = 'domains';
+    nav['Domains'] = 'domains';
     if (hasRoutes) {
         nav['Routes'] = 'routes';
         nav['routes'] = 'routes';
@@ -2619,6 +2736,12 @@ function buildPreviewFromScan(scan: WorkspaceScan): MermaidPreview {
     }
     navByViewId.overview = nav;
     openByViewId.overview = {};
+
+    // Generate Domains view
+    const domainView = buildSubsystemDomainView(scan);
+    views.domains = domainView.mermaid;
+    openByViewId.domains = domainView.openMap;
+    navByViewId.domains = domainView.navMap;
 
     // Initialize open maps BEFORE calling buildSectionView so the Mermaid node IDs
     // are populated inside buildSectionView, then merge with buildOpenMapForDetails.
