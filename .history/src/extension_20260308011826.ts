@@ -2632,7 +2632,7 @@ ${fileList}`;
         domainCounter++;
         const domId = 'Domain_' + domainCounter;
 
-        lines.push(`  subgraph ${domId}["🧩 ${escapeMermaidLabel(domainName)} Subsystem"]`);
+        lines.push(`  subgraph ${domId}[🧩 ${escapeMermaidLabel(domainName)} Subsystem]`);
         lines.push('    direction LR');
 
         // Try to draw internal edges: frontend -> backend -> datastore if they exist within the same domain
@@ -2648,7 +2648,7 @@ ${fileList}`;
             else if (n.kind === 'datastore') icon = '🗄️';
             else if (n.kind === 'external') icon = '🌐';
 
-            lines.push(`    ${n.id}["${icon} ${escapeMermaidLabel(n.label)}"]`);
+            lines.push(`    ${n.id}[${icon} ${escapeMermaidLabel(n.label)}]`);
             if (n.kind === 'frontend') lines.push(`    style ${n.id} fill:#bbf7d0,stroke:#059669,color:#064e3b`);
             if (n.kind === 'backend') lines.push(`    style ${n.id} fill:#ddd6fe,stroke:#7c3aed,color:#2e1065`);
             if (n.kind === 'datastore') lines.push(`    style ${n.id} fill:#bae6fd,stroke:#0369a1,color:#0c4a6e`);
@@ -2659,8 +2659,6 @@ ${fileList}`;
                 openMap[`${icon} ${n.label}`] = { filePath: n.filePath, line: 1 };
             }
         }
-
-        lines.push('  end');
 
     }
 
@@ -3064,7 +3062,7 @@ function addClassStyling(mermaidCode: string): string {
     const classLines: string[] = [];
     for (const [className, ids] of Object.entries(buckets)) {
         if (ids.length === 0) continue;
-        classLines.push(`class ${ids.join(',')} ${className}`);
+        classLines.push(`class ${ids.join(',')} ${className};`);
     }
 
     if (classLines.length === 0) return mermaidCode;

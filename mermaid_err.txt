@@ -1,0 +1,22 @@
+    style domNode_21 fill:#bbf7d0,stroke:#059669,color:#064e3b
+    domNode_26[🖥️ frontend\hooks\useVaultSync.ts]
+    style domNode_26 fill:#bbf7d0,stroke:#059669,color:#064e3b
+    domNode_35[⚙️ backend\src\routes\syncRoutes.ts]
+    style domNode_35 fill:#ddd6fe,stroke:#7c3aed,color:#2e1065
+    domNode_36[⚙️ backend\src\routes\shareRoutes.ts]
+    style domNode_36 fill:#ddd6fe,stroke:#7c3aed,color:#2e1065
+    domNode_39[🗄️ backend\src\services\syncService.ts]
+    style domNode_39 fill:#bae6fd,stroke:#0369a1,color:#0c4a6e
+    domNode_44[🌐 mobile\src\store\vaultStore.ts]
+    style domNode_44 fill:#fecdd3,stroke:#e11d48,color:#881337
+
+%% Styling injected by @mapper
+classDef frontend fill:#bbf7d0,stroke:#059669,stroke-width:2px,color:#064e3b,font-weight:bold;
+classDef service fill:#ddd6fe,stroke:#7c3aed,stroke-width:2px,color:#2e1065,font-weight:bold;
+classDef db fill:#bae6fd,stroke:#0369a1,stroke-width:2px,color:#0c4a6e,font-weight:bold;
+classDef cache fill:#fde68a,stroke:#d97706,stroke-width:2px,color:#713f12,font-weight:bold;
+classDef external fill:#fecdd3,stroke:#e11d48,stroke-width:2px,color:#881337,font-weight:bold,stroke-dasharray: 5 3;
+class domNode_41,domNode_42,domNode_43 db;
+class domNode_37 service;
+class domNode_14,domNode_20,domNode_24,domNode_25,domNode_45,domNode_1,domNode_2,domNode_3,domNode_4,domNode_5,domNode_6,domNode_9,domNode_10,domNode_13,domNode_15,domNode_18,domNode_22,domNode_28,domNode_30,domNode_8,domNode_12,domNode_17,domNode_19,domNode_23,domNode_27,domNode_7,domNode_11,domNode_16,domNode_21,domNode_26,domNode_44 frontend;
+class domNode_29 external;
