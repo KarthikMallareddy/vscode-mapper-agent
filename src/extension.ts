@@ -261,7 +261,403 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        response.markdown("👋 I am **@mapper**. Try `/draw`, `/trace <symbol>`, `/path <route>`, `/config`, or `/export`!");
+        if (request.command === 'explain') {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                response.markdown('⚠️ No file is currently open. Open a file and try again.');
+                return;
+            }
+            const filePath = editor.document.uri.fsPath;
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            const rootPath = workspaceFolders?.[0]?.uri.fsPath || '';
+            const relPath = rootPath ? path.relative(rootPath, filePath).replace(/\\/g, '/') : path.basename(filePath);
+            const ext = path.extname(filePath).toLowerCase();
+            const text = editor.document.getText();
+            const lines = text.split('\n');
+
+            response.markdown(`## 📄 File: \`${relPath}\`\n\n`);
+
+            // Detect language & framework signals.
+            const lower = text.toLowerCase();
+            const roles: string[] = [];
+            const details: string[] = [];
+
+            if (ext === '.py') {
+                const isFastAPI = /\bfrom\s+fastapi\b|\bimport\s+fastapi\b/.test(lower);
+                const isFlask   = /\bfrom\s+flask\b|\bimport\s+flask\b/.test(lower);
+                const isDjango  = /\bdjango\b/.test(lower);
+                const isStreamlit = /\bimport\s+streamlit\b|\bfrom\s+streamlit\b|\bst\./.test(lower);
+
+                if (isFastAPI)   roles.push('**FastAPI** backend/router');
+                if (isFlask)     roles.push('**Flask** backend/router');
+                if (isDjango)    roles.push('**Django** component');
+                if (isStreamlit) roles.push('**Streamlit** UI page');
+                if (roles.length === 0) roles.push('Python module');
+
+                // Count routes / endpoints.
+                const routeLines = lines.filter(l => /@\w+\.(get|post|put|delete|patch)\s*\(/i.test(l));
+                if (routeLines.length > 0) {
+                    details.push(`🛤️ **${routeLines.length} route(s) registered:**`);
+                    for (const rl of routeLines.slice(0, 10)) {
+                        const m = rl.match(/@(\w+)\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)/i);
+                        if (m) details.push(`  - \`${m[2].toUpperCase()} ${m[3]}\``);
+                    }
+                }
+
+                // Imports.
+                const importLines = lines.filter(l => /^\s*(import|from)\s/.test(l)).slice(0, 15);
+                if (importLines.length > 0) {
+                    details.push(`📦 **Imports (${importLines.length}):**`);
+                    for (const il of importLines) details.push(`  - \`${il.trim()}\``);
+                }
+
+                // Top-level symbols.
+                const defs = lines.filter(l => /^\s*(def|class)\s+\w/.test(l)).slice(0, 20);
+                if (defs.length > 0) {
+                    details.push(`🔣 **Defines ${defs.length} symbol(s):**`);
+                    for (const d of defs) {
+                        const m = d.match(/^\s*(def|class)\s+(\w+)/);
+                        if (m) details.push(`  - \`${m[1]} ${m[2]}\``);
+                    }
+                }
+
+            } else if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
+                const isReact  = /\bfrom\s+['"]react['"]/i.test(lower) || /\bimport\s+react\b/i.test(lower);
+                const isNext   = /\bfrom\s+['"]next\b/i.test(lower) || /(^|\/)pages\//.test(relPath) || /(^|\/)app\//.test(relPath);
+                const isExpress = /\brequire\s*\(\s*['"]express['"]\)|\bfrom\s+['"]express['"]/i.test(lower);
+                const isFastify = /\brequire\s*\(\s*['"]fastify['"]\)|\bfrom\s+['"]fastify['"]/i.test(lower);
+                const isNest   = /\bfrom\s+['"]@nestjs\b/i.test(lower);
+
+                if (isNext)    roles.push('**Next.js** page/route');
+                else if (isReact) roles.push('**React** component');
+                if (isExpress) roles.push('**Express.js** router/server');
+                if (isFastify) roles.push('**Fastify** router/server');
+                if (isNest)    roles.push('**NestJS** module/controller');
+                if (roles.length === 0) roles.push('TypeScript/JavaScript module');
+
+                // Route registrations.
+                const routeLines = lines.filter(l => /\.(get|post|put|delete|patch)\s*\(\s*['"`]/i.test(l));
+                if (routeLines.length > 0) {
+                    details.push(`🛤️ **${routeLines.length} route(s) registered:**`);
+                    for (const rl of routeLines.slice(0, 10)) {
+                        const m = rl.match(/\.(get|post|put|delete|patch)\s*\(\s*['"`]([^'"`]+)/i);
+                        if (m) details.push(`  - \`${m[1].toUpperCase()} ${m[2]}\``);
+                    }
+                }
+
+                // Imports.
+                const importLines = lines.filter(l => /^\s*(import|const\s+\w+\s*=\s*require)/.test(l)).slice(0, 15);
+                if (importLines.length > 0) {
+                    details.push(`📦 **Imports (${importLines.length}):**`);
+                    for (const il of importLines) details.push(`  - \`${il.trim()}\``);
+                }
+
+                // Exported symbols.
+                const exportedLines = lines.filter(l => /^\s*export\s+(default\s+)?(function|class|const|async function)/.test(l)).slice(0, 20);
+                if (exportedLines.length > 0) {
+                    details.push(`🔣 **Exports ${exportedLines.length} symbol(s):**`);
+                    for (const d of exportedLines) {
+                        const m = d.match(/export\s+(?:default\s+)?(?:async\s+)?(function|class|const)\s+(\w+)/);
+                        if (m) details.push(`  - \`${m[1]} ${m[2]}\``);
+                    }
+                }
+            } else {
+                roles.push(`\`${ext}\` file`);
+            }
+
+            // Check for DB patterns.
+            const dbHints: string[] = [];
+            if (/\b(sqlalchemy|create_engine|sessionmaker|declarative_base)\b/.test(lower)) dbHints.push('SQLAlchemy ORM');
+            if (/\b(psycopg2|asyncpg)\b/.test(lower)) dbHints.push('PostgreSQL driver');
+            if (/\b(pymongo|motor)\b/.test(lower)) dbHints.push('MongoDB driver');
+            if (/\b(redis)\b/.test(lower)) dbHints.push('Redis client');
+            if (/\b(mongoose|typeorm|prisma|sequelize)\b/.test(lower)) dbHints.push('DB ORM/client');
+            if (dbHints.length > 0) details.push(`🗄️ **Database usage:** ${dbHints.join(', ')}`);
+
+            // External API patterns.
+            const extHints: string[] = [];
+            if (/\bopenai\b/.test(lower)) extHints.push('OpenAI API');
+            if (/\bsupabase\b/.test(lower)) extHints.push('Supabase');
+            if (/\bfirebase\b/.test(lower)) extHints.push('Firebase');
+            if (/\b(requests|httpx|aiohttp|axios)\b/.test(lower)) extHints.push('HTTP client calls');
+            if (extHints.length > 0) details.push(`🌐 **External calls:** ${extHints.join(', ')}`);
+
+            // TODOs in this file.
+            const todos = lines.filter(l => /\b(TODO|FIXME|HACK|XXX)\b/.test(l));
+            if (todos.length > 0) details.push(`⚠️ **${todos.length} TODO/FIXME comment(s) in this file**`);
+
+            response.markdown(`**Role:** ${roles.join(', ')}\n\n`);
+            response.markdown(`**Size:** ${lines.length} lines\n\n`);
+            for (const d of details) response.markdown(d + '\n');
+
+            if (details.length === 0) {
+                response.markdown('_No specific framework signals detected. This appears to be a utility or configuration file._\n');
+            }
+            return;
+        }
+
+        if (request.command === 'summary') {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) {
+                response.markdown('⚠️ No workspace folder open.');
+                return;
+            }
+            const rootPath = workspaceFolders[0].uri.fsPath;
+            response.markdown('📋 **Generating Daily Standup Summary...**\n\n');
+
+            try {
+                const { execSync } = require('child_process') as typeof import('child_process');
+
+                // Get author email from git config.
+                let authorEmail = '';
+                try {
+                    authorEmail = execSync('git config user.email', { cwd: rootPath, encoding: 'utf8' }).trim();
+                } catch { /* no git config — will fetch all authors */ }
+
+                // Fetch commits from the last 7 days.
+                const sinceArg = '--since="7 days ago"';
+                const authorArg = authorEmail ? `--author="${authorEmail}"` : '';
+                const logCmd = `git log ${sinceArg} ${authorArg} --pretty=format:"%ad|%s|%H" --date=short`;
+
+                let rawLog = '';
+                try {
+                    rawLog = execSync(logCmd, { cwd: rootPath, encoding: 'utf8' }).trim();
+                } catch {
+                    response.markdown('⚠️ Could not read git log. Make sure this is a git repository.');
+                    return;
+                }
+
+                if (!rawLog) {
+                    response.markdown('_No commits found in the last 7 days._\n');
+                    return;
+                }
+
+                // Group commits by date.
+                const byDate: Record<string, string[]> = {};
+                for (const line of rawLog.split('\n')) {
+                    const parts = line.split('|');
+                    if (parts.length < 2) continue;
+                    const date = parts[0].trim();
+                    const subject = parts[1].trim();
+                    if (!byDate[date]) byDate[date] = [];
+                    byDate[date].push(subject);
+                }
+
+                const today = new Date().toISOString().split('T')[0];
+                const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+
+                for (const [date, commits] of Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0]))) {
+                    const label = date === today ? '🟢 Today' : date === yesterday ? '🟡 Yesterday' : `📅 ${date}`;
+                    response.markdown(`### ${label}\n`);
+                    for (const c of commits) response.markdown(`- ${c}\n`);
+                    response.markdown('\n');
+                }
+
+                if (authorEmail) {
+                    response.markdown(`\n_Showing commits by **${authorEmail}**. Use \`mapper.resetApiKey\` or switch git user to change._\n`);
+                }
+            } catch (err: any) {
+                response.markdown(`❌ Error: ${err.message}`);
+            }
+            return;
+        }
+
+        if (request.command === 'audit') {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) { response.markdown('⚠️ No workspace folder open.'); return; }
+            const rootPath = workspaceFolders[0].uri.fsPath;
+            response.markdown('🔍 **Running Code Health Audit...**\n\n');
+
+            try {
+                let scan = getCachedScan(rootPath);
+                if (!scan) {
+                    scan = await scanWorkspace(rootPath);
+                    setCachedScan(rootPath, scan);
+                }
+
+                // ── 1. Dead code (symbols with no recorded uses) ──
+                const dead: SymbolDef[] = [];
+                for (const sym of scan.symbols) {
+                    const key = `${sym.kind}:${sym.name}:${sym.relPath}:${sym.line}`;
+                    const uses = scan.symbolUses[key] || [];
+                    if (uses.length === 0 && sym.kind !== 'variable') dead.push(sym);
+                }
+
+                // ── 2. TODO / FIXME / HACK scan ──
+                const todoFiles = await vscode.workspace.findFiles(
+                    new vscode.RelativePattern(rootPath, '**/*.{py,ts,tsx,js,jsx,java,go,rs}'),
+                    '**/{node_modules,dist,out,.next,build,coverage,.turbo,venv,.venv,__pycache__,.history,.git}/**',
+                    300
+                );
+                let totalTodos = 0;
+                const todoHotspots: Array<{ relPath: string; count: number }> = [];
+                for (const uri of todoFiles.slice(0, 100)) {
+                    const text = await readTextFile(uri);
+                    if (!text) continue;
+                    const count = (text.match(/\b(TODO|FIXME|HACK|XXX)\b/g) || []).length;
+                    if (count > 0) {
+                        totalTodos += count;
+                        const rel = path.relative(rootPath, uri.fsPath).replace(/\\/g, '/');
+                        todoHotspots.push({ relPath: rel, count });
+                    }
+                }
+                todoHotspots.sort((a, b) => b.count - a.count);
+
+                // ── 3. Large files ──
+                const allSourceFiles = await vscode.workspace.findFiles(
+                    new vscode.RelativePattern(rootPath, '**/*.{py,ts,tsx,js,jsx,java,go,rs}'),
+                    '**/{node_modules,dist,out,.next,build,coverage,.turbo,venv,.venv,__pycache__,.history,.git}/**',
+                    300
+                );
+                const largeFiles: Array<{ relPath: string; lines: number }> = [];
+                for (const uri of allSourceFiles.slice(0, 100)) {
+                    const text = await readTextFile(uri);
+                    if (!text) continue;
+                    const lineCount = text.split('\n').length;
+                    if (lineCount > 500) {
+                        const rel = path.relative(rootPath, uri.fsPath).replace(/\\/g, '/');
+                        largeFiles.push({ relPath: rel, lines: lineCount });
+                    }
+                }
+                largeFiles.sort((a, b) => b.lines - a.lines);
+
+                // ── 4. Missing env keys ──
+                const envUris = await vscode.workspace.findFiles(
+                    new vscode.RelativePattern(rootPath, '**/.env*'),
+                    '**/node_modules/**', 10
+                );
+                const definedKeys = new Set<string>();
+                for (const uri of envUris) {
+                    const text = await readTextFile(uri);
+                    if (!text) continue;
+                    for (const k of parseDotEnvKeys(text)) definedKeys.add(k);
+                }
+                const usedKeyMatches: string[] = [];
+                for (const uri of allSourceFiles.slice(0, 80)) {
+                    const text = await readTextFile(uri);
+                    if (!text) continue;
+                    const matches = text.match(/\bprocess\.env\.([A-Z_][A-Z0-9_]+)|\bos\.(?:environ|getenv)\s*[\[("']+([A-Z_][A-Z0-9_]+)/g) || [];
+                    for (const m of matches) {
+                        const key = (m.match(/([A-Z_][A-Z0-9_]+)$/) || [])[1];
+                        if (key && !definedKeys.has(key)) usedKeyMatches.push(key);
+                    }
+                }
+                const missingKeys = [...new Set(usedKeyMatches)];
+
+                // ── Report ──
+                const issueCount = dead.length + (totalTodos > 0 ? 1 : 0) + largeFiles.length + missingKeys.length;
+                response.markdown(`### 📊 Health Summary — **${issueCount} issue type(s) found**\n\n`);
+
+                // Dead code.
+                if (dead.length > 0) {
+                    response.markdown(`#### 🪦 Dead Code — ${dead.length} unreferenced symbol(s)\n`);
+                    for (const d of dead.slice(0, 15)) {
+                        response.markdown(`- \`${d.kind}\` **${d.name}** — \`${d.relPath}:${d.line}\`\n`);
+                    }
+                    if (dead.length > 15) response.markdown(`- _...and ${dead.length - 15} more_\n`);
+                    response.markdown('\n');
+                } else {
+                    response.markdown('✅ **No dead code detected.**\n\n');
+                }
+
+                // TODOs.
+                if (totalTodos > 0) {
+                    response.markdown(`#### ⚠️ TODOs & FIXMEs — ${totalTodos} comment(s) in ${todoHotspots.length} file(s)\n`);
+                    for (const h of todoHotspots.slice(0, 10)) {
+                        response.markdown(`- \`${h.relPath}\` — **${h.count}** comment(s)\n`);
+                    }
+                    response.markdown('\n');
+                } else {
+                    response.markdown('✅ **No TODO/FIXME comments found.**\n\n');
+                }
+
+                // Large files.
+                if (largeFiles.length > 0) {
+                    response.markdown(`#### 📏 Large Files (>500 lines) — ${largeFiles.length} file(s)\n`);
+                    for (const f of largeFiles.slice(0, 10)) {
+                        response.markdown(`- \`${f.relPath}\` — **${f.lines}** lines\n`);
+                    }
+                    response.markdown('\n');
+                } else {
+                    response.markdown('✅ **No oversized files detected.**\n\n');
+                }
+
+                // Missing env keys.
+                if (missingKeys.length > 0) {
+                    response.markdown(`#### 🔑 Missing Env Keys — ${missingKeys.length} key(s) used in code but not in .env\n`);
+                    for (const k of missingKeys.slice(0, 15)) response.markdown(`- \`${k}\`\n`);
+                    response.markdown('\n');
+                } else {
+                    response.markdown('✅ **All env keys are defined.**\n\n');
+                }
+
+            } catch (err: any) {
+                response.markdown(`❌ Error: ${err.message}`);
+            }
+            return;
+        }
+
+        if (request.command === 'glossary') {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) { response.markdown('⚠️ No workspace folder open.'); return; }
+            const rootPath = workspaceFolders[0].uri.fsPath;
+            response.markdown('📖 **Building Project Glossary...**\n\n');
+
+            try {
+                let scan = getCachedScan(rootPath);
+                if (!scan) {
+                    scan = await scanWorkspace(rootPath);
+                    setCachedScan(rootPath, scan);
+                }
+
+                const symbols = scan.symbols;
+                if (symbols.length === 0) {
+                    response.markdown('_No symbols found. Try running `@mapper /draw` first to scan the workspace._\n');
+                    return;
+                }
+
+                // Group symbols by file.
+                const byFile = new Map<string, SymbolDef[]>();
+                for (const sym of symbols) {
+                    const existing = byFile.get(sym.relPath) || [];
+                    existing.push(sym);
+                    byFile.set(sym.relPath, existing);
+                }
+
+                const classes = symbols.filter((s: SymbolDef) => s.kind === 'class').length;
+                const funcs = symbols.filter((s: SymbolDef) => s.kind === 'function').length;
+                const vars = symbols.filter((s: SymbolDef) => s.kind === 'variable').length;
+
+                response.markdown(`**${symbols.length} total symbols** across **${byFile.size} file(s)** — ${classes} classes · ${funcs} functions · ${vars} variables\n\n---\n\n`);
+
+                for (const [relPath, syms] of [...byFile.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+                    response.markdown(`### 📄 \`${relPath}\`\n`);
+
+                    const groups: Record<string, SymbolDef[]> = { class: [], function: [], variable: [] };
+                    for (const s of syms) groups[s.kind]?.push(s);
+
+                    if (groups.class.length > 0) {
+                        response.markdown(`**Classes:** `);
+                        response.markdown(groups.class.map(s => `\`${s.name}\` (line ${s.line})`).join(' · ') + '\n');
+                    }
+                    if (groups.function.length > 0) {
+                        response.markdown(`**Functions:** `);
+                        response.markdown(groups.function.map(s => `\`${s.name}\` (line ${s.line})`).join(' · ') + '\n');
+                    }
+                    if (groups.variable.length > 0) {
+                        response.markdown(`**Variables:** `);
+                        response.markdown(groups.variable.map(s => `\`${s.name}\` (line ${s.line})`).join(' · ') + '\n');
+                    }
+                    response.markdown('\n');
+                }
+
+            } catch (err: any) {
+                response.markdown(`❌ Error: ${err.message}`);
+            }
+            return;
+        }
+
+        response.markdown("👋 I am **@mapper**. Try `/draw`, `/trace <symbol>`, `/path <route>`, `/config`, `/export`, `/explain`, `/summary`, `/audit`, or `/glossary`!");
     });
 
     context.subscriptions.push(mapper);
