@@ -3059,85 +3059,80 @@ ${fileList}`;
         return a.localeCompare(b);
     });
 
-    // ── Build an HTML card-grid instead of Mermaid so layout is always readable ──
-    // The webview renderView() detects the '<!--html-->' prefix and renders as HTML.
-    const kindColors: Record<string, { bg: string; border: string; color: string; label: string }> = {
-        frontend:  { bg: '#bbf7d0', border: '#059669', color: '#064e3b', label: '🖥️ Frontend' },
-        backend:   { bg: '#ddd6fe', border: '#7c3aed', color: '#2e1065', label: '⚙️ Backend' },
-        datastore: { bg: '#bae6fd', border: '#0369a1', color: '#0c4a6e', label: '🗄️ Data' },
-        external:  { bg: '#fecdd3', border: '#e11d48', color: '#881337', label: '🌐 External' },
-        unknown:   { bg: '#f1f5f9', border: '#94a3b8', color: '#334155', label: '📄 Other' },
+    const kindColors: Record<string, { fill: string; stroke: string; color: string; prefix: string }> = {
+        frontend:  { fill: '#10b98126', stroke: '#10b9814d', color: '#6ee7b7', prefix: '💻' },
+        backend:   { fill: '#8b5cf626', stroke: '#8b5cf64d', color: '#c4b5fd', prefix: '⚙️' },
+        datastore: { fill: '#0ea5e926', stroke: '#0ea5e94d', color: '#7dd3fc', prefix: '🗄️' },
+        external:  { fill: '#e11d4826', stroke: '#e11d484d', color: '#fda4af', prefix: '🌐' },
+        unknown:   { fill: '#ffffff0d', stroke: '#ffffff1a', color: '#cbd5e1', prefix: '📄' },
     };
 
-    // Serialise the open-map so the webview JS can wire click-to-open.
-    // We embed it inline in the HTML payload.
-    const htmlParts: string[] = [];
-    htmlParts.push('<!--html-->');
-    htmlParts.push('<style>');
-    htmlParts.push('.dom-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;padding:16px;overflow-y:auto;height:calc(100vh - 80px);box-sizing:border-box;}');
-    htmlParts.push('.dom-card{border:2px solid #6366f1;border-radius:10px;background:#1e1b4b10;padding:12px 14px;display:flex;flex-direction:column;gap:8px;}');
-    htmlParts.push('.dom-card-title{font-size:13px;font-weight:700;color:var(--fg);display:flex;align-items:center;gap:6px;margin-bottom:4px;}');
-    htmlParts.push('.dom-file{border-radius:6px;padding:5px 9px;font-size:11px;font-weight:600;cursor:pointer;transition:filter .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}');
-    htmlParts.push('.dom-file:hover{filter:brightness(0.85);}');
-    htmlParts.push('.dom-more{font-size:11px;color:#64748b;padding:3px 6px;font-style:italic;}');
-    htmlParts.push('.dom-empty{color:#64748b;font-size:12px;padding:40px;text-align:center;}');
-    htmlParts.push('</style>');
-
     if (sortedDomains.length === 0) {
-        htmlParts.push('<div class="dom-empty">No subsystems detected.</div>');
+        lines.push('  Empty["No subsystems detected."]');
     } else {
-        // Encode the openMap inline for click handlers.
-        const openMapEncoded = JSON.stringify(openMap);
-        htmlParts.push(`<script id="__domOpen" type="application/json">${openMapEncoded}</script>`);
-        htmlParts.push('<div class="dom-grid">');
+        const COLS = 4;
+        let domainIdx = 0;
+        const rowGroups: string[][] = [];
+        let currentRow: string[] = [];
+
+        const rootNode = 'DomainsRoot';
+        lines.push(`  ${rootNode}["🧩 Feature Subsystems"]`);
+        lines.push(`  style ${rootNode} fill:#e0e7ff,stroke:#6366f1,stroke-width:2px,color:#1e1b4b,font-weight:bold`);
+
         for (const domainName of sortedDomains) {
             const nodes = subsystemDomains.get(domainName) || [];
             if (nodes.length === 0) continue;
-            htmlParts.push('<div class="dom-card">');
-            htmlParts.push(`<div class="dom-card-title">🧩 ${escapeHtml(domainName)}</div>`);
-            const MAX_SHOWN = 8;
-            for (const n of nodes.slice(0, MAX_SHOWN)) {
+            
+            domainIdx++;
+            const domId = toMermaidId(`dom_${domainIdx}`);
+            lines.push(`  subgraph ${domId}["🚀 ${escapeMermaidLabel(domainName)}"]`);
+            lines.push(`    direction TB`);
+            
+            const MAX_SHOWN = 6;
+            for (let i = 0; i < Math.min(nodes.length, MAX_SHOWN); i++) {
+                const n = nodes[i];
                 const c = kindColors[n.kind] || kindColors.unknown;
-                const fileId = n.id;  // use node id as data attribute for click lookup
+                const nid = toMermaidId(`dom_${domainIdx}_${i}`);
+                
+                const rawLabel = `${c.prefix} ${n.label || n.relPath}`;
+                const safeLabel = rawLabel.replace(/"/g, "'").replace(/\r?\n/g, ' ');
+                lines.push(`    ${nid}["${safeLabel}"]`);
+                lines.push(`    style ${nid} fill:${c.fill},stroke:${c.stroke},color:${c.color}`);
+                
                 if (n.filePath) {
-                    openMap[n.id] = { filePath: n.filePath, line: 1 };
+                    openMap[nid] = { filePath: n.filePath, line: 1 };
                 }
-                htmlParts.push(`<div class="dom-file" style="background:${c.bg};border:1px solid ${c.border};color:${c.color}" data-domid="${escapeHtml(fileId)}" title="${escapeHtml(n.relPath)}">${escapeHtml(n.label)}</div>`);
             }
+            
             if (nodes.length > MAX_SHOWN) {
-                htmlParts.push(`<div class="dom-more">+${nodes.length - MAX_SHOWN} more files...</div>`);
+                const moreId = toMermaidId(`dom_${domainIdx}_more`);
+                lines.push(`    ${moreId}["+${nodes.length - MAX_SHOWN} files..."]`);
+                lines.push(`    style ${moreId} fill:none,stroke:#94a3b8,stroke-dasharray:4 4,color:#64748b,font-size:11px`);
             }
-            htmlParts.push('</div>');
+            lines.push(`  end`);
+            
+            currentRow.push(domId);
+            if (currentRow.length === COLS) {
+                rowGroups.push(currentRow);
+                currentRow = [];
+            }
         }
-        htmlParts.push('</div>');
-        // Wire clicks using a script that reads the embedded JSON and attaches click handlers.
-        // Use double-quotes inside the JS strings so we don't need escaping in TS.
-        const clickScript = [
-            '(function() {',
-            '  try {',
-            '    var el = document.getElementById("__domOpen");',
-            '    var om = el ? JSON.parse(el.textContent || "{}") : {};',
-            '    document.querySelectorAll(".dom-file").forEach(function(node) {',
-            '      node.addEventListener("click", function() {',
-            '        var id = node.dataset.domid;',
-            '        var info = om[id];',
-            '        if (info && window.__vscodeApi) {',
-            '          window.__vscodeApi.postMessage({ type: "open", filePath: info.filePath, line: info.line || 1 });',
-            '        }',
-            '      });',
-            '    });',
-            '  } catch(e) {}',
-            '})();',
-        ].join('\n');
-        htmlParts.push(`<script id="__domScript">${clickScript}</script>`);
+        if (currentRow.length > 0) rowGroups.push(currentRow);
+
+        for (const row of rowGroups) {
+            lines.push(`  ${rootNode} --> ${row[0]}`);
+            for (let i = 0; i < row.length - 1; i++) {
+                lines.push(`  ${row[i]} ~~~ ${row[i + 1]}`);
+            }
+        }
     }
 
-    // Also populate openMap with all nodes for the standard wire-clickable path.
+    // Populate openMap generic routing
     for (const node of candidateNodes) {
         if (node.filePath) openMap[node.id] = { filePath: node.filePath, line: 1 };
     }
 
-    return { mermaid: htmlParts.join('\n'), openMap, navMap };
+    return { mermaid: lines.join('\n'), openMap, navMap };
 }
 
 async function buildPreviewFromScan(scan: WorkspaceScan): Promise<MermaidPreview> {
@@ -3423,9 +3418,10 @@ function buildSectionView(
     const routeTotal = details.reduce((acc, d) => acc + (d.filePath ? (routeCountByFile.get(d.filePath) || 0) : 0), 0);
     const funcTotal  = details.reduce((acc, d) => acc + (d.filePath ? (symCountByFile.get(d.filePath)?.funcs || 0) : 0), 0);
     const headerLabel = routeTotal > 0
-        ? `${escapeMermaidLabel(title)} · ${details.length} files · ${routeTotal} routes · ${funcTotal} fns`
-        : `${escapeMermaidLabel(title)} · ${details.length} files · ${funcTotal} fns`;
-    lines.push(`  ${rootId}["${headerLabel}"]`);
+        ? `${title} - ${details.length} files - ${routeTotal} routes - ${funcTotal} fns`
+        : `${title} - ${details.length} files - ${funcTotal} fns`;
+    const safeHeader = headerLabel.replace(/"/g, "'").replace(/\r?\n/g, ' ');
+    lines.push(`  ${rootId}["${safeHeader}"]`);
     lines.push(`  style ${rootId} fill:#e0e7ff,stroke:#6366f1,stroke-width:2px,color:#1e1b4b,font-weight:bold`);
 
     if (details.length === 0) {
@@ -3444,10 +3440,10 @@ function buildSectionView(
         const counts = d.filePath ? symCountByFile.get(d.filePath) : undefined;
         const routes = d.filePath ? (routeCountByFile.get(d.filePath) || 0) : 0;
         const badges: string[] = [];
-        if (routes > 0) badges.push(`${routes}🛤️`);
-        if (counts?.classes) badges.push(`${counts.classes}cls`);
-        if (counts?.funcs) badges.push(`${counts.funcs}fn`);
-        const symInfo = badges.join(' ');
+        if (routes > 0) badges.push(`${routes} route${routes > 1 ? 's' : ''}`);
+        if (counts?.classes) badges.push(`${counts.classes} class${counts.classes > 1 ? 'es' : ''}`);
+        if (counts?.funcs) badges.push(`${counts.funcs} fn${counts.funcs > 1 ? 's' : ''}`);
+        const symInfo = badges.join(', ');
         const list = groups.get(top) || [];
         list.push({ rel, fileName, filePath: d.filePath, role, symInfo });
         groups.set(top, list);
@@ -3464,7 +3460,7 @@ function buildSectionView(
         const groupId = toMermaidId(`${rootId}_grp_${groupIndex}`);
         lines.push(`  ${rootId} --> ${groupId}`);
         lines.push(`  subgraph ${groupId}["📂 ${escapeMermaidLabel(groupName)}"]`);
-        lines.push('    direction TB');
+        lines.push('    direction LR');
 
         const items = (groups.get(groupName) || []).slice(0, 8);
         const nodeIds: string[] = [];
@@ -3472,11 +3468,14 @@ function buildSectionView(
             const item = items[i];
             const id = toMermaidId(`${rootId}_${groupIndex}_${i + 1}`);
             nodeIds.push(id);
-            // Rich label: filename + role badge + symbol counts
+            // Rich label inside a Mermaid quoted node ["..."]:
+            // Only escape double-quotes and newlines — NOT brackets or dots.
             const roleTag = item.role ? ` [${item.role}]` : '';
-            const symTag = item.symInfo ? ` · ${item.symInfo}` : '';
-            const richLabel = `${item.fileName}${roleTag}${symTag}`;
-            lines.push(`    ${id}["${escapeMermaidLabel(richLabel)}"]`);
+            const symTag = item.symInfo ? ` | ${item.symInfo}` : '';
+            const rawLabel = `${item.fileName}${roleTag}${symTag}`;
+            // Safe for Mermaid quoted strings: escape only double-quotes.
+            const safeLabel = rawLabel.replace(/"/g, "'").replace(/\r?\n/g, ' ');
+            lines.push(`    ${id}["${safeLabel}"]`);
 
             if (openMap && item.filePath) {
                 openMap[id] = { filePath: item.filePath, line: 1 };
@@ -3484,17 +3483,12 @@ function buildSectionView(
             }
         }
 
-        for (let i = 0; i < nodeIds.length - 1; i++) {
-            lines.push(`    ${nodeIds[i]} --> ${nodeIds[i + 1]}`);
-        }
+        // No arrow chains between nodes — let Mermaid auto-layout them side-by-side.
 
         const extra = (groups.get(groupName) || []).length - items.length;
         if (extra > 0) {
             const moreId = toMermaidId(`${rootId}_${groupIndex}_more`);
             lines.push(`    ${moreId}["+${extra} more..."]`);
-            if (nodeIds.length > 0) {
-                lines.push(`    ${nodeIds[nodeIds.length - 1]} --> ${moreId}`);
-            }
         }
 
         lines.push('  end');
@@ -3765,55 +3759,97 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net;">
             <style>
                 :root {
-                    --bg: var(--vscode-editor-background, #1e1e1e);
-                    --fg: var(--vscode-editor-foreground, #d4d4d4);
-                    --border: var(--vscode-panel-border, #3c3c3c);
-                    --btn-bg: var(--vscode-button-secondaryBackground, #3c3c3c);
-                    --btn-fg: var(--vscode-button-secondaryForeground, #d4d4d4);
-                    --btn-hover: var(--vscode-button-secondaryHoverBackground, #4c4c4c);
-                    --accent: var(--vscode-focusBorder, #007fd4);
-                    --input-bg: var(--vscode-input-background, #3c3c3c);
-                    --input-fg: var(--vscode-input-foreground, #d4d4d4);
-                    --input-border: var(--vscode-input-border, #5c5c5c);
-                    --muted: var(--vscode-descriptionForeground, #8b8b8b);
+                    --bg: #0f111a;
+                    --fg: #e2e8f0;
+                    --border: rgba(255, 255, 255, 0.15);
+                    --btn-bg: rgba(255, 255, 255, 0.12);
+                    --btn-fg: #ffffff;
+                    --btn-hover: rgba(255, 255, 255, 0.2);
+                    --accent: #6366f1;
+                    --accent-glow: rgba(99, 102, 241, 0.4);
+                    --input-bg: rgba(15, 17, 26, 0.8);
+                    --input-fg: #e2e8f0;
+                    --input-border: rgba(255, 255, 255, 0.15);
+                    --muted: #94a3b8;
                 }
-                body { background: var(--bg); color: var(--fg); margin: 0; padding: 0; overflow: hidden; height: 100vh; width: 100vw; font-family: var(--vscode-font-family, 'Segoe UI', sans-serif); font-size: 13px; }
+                body { 
+                    background: radial-gradient(circle at 50% 0%, #1e1b4b, #0f111a 80%); 
+                    background-attachment: fixed;
+                    color: var(--fg); margin: 0; padding: 0; overflow: hidden; height: 100vh; width: 100vw; 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+                    font-size: 13px; 
+                    -webkit-font-smoothing: antialiased;
+                }
+                /* Webkit scrollbar for sleek dark mode */
+                ::-webkit-scrollbar { width: 8px; height: 8px; }
+                ::-webkit-scrollbar-track { background: transparent; }
+                ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 4px; }
+                ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
+
                 #controls {
                     position: absolute; top: 0; left: 0; right: 0; z-index: 100;
-                    background: var(--bg); padding: 8px 14px;
-                    border-bottom: 2px solid var(--accent);
-                    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+                    background: rgba(15, 17, 26, 0.65); 
+                    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+                    border-bottom: 1px solid var(--border);
+                    padding: 12px 18px; 
+                    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
                 }
-                #backBtn, #traceBtn, #openBtn {
-                    border: 1px solid var(--border); background: var(--btn-bg); color: var(--btn-fg);
-                    padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500;
-                    transition: background 0.15s, border-color 0.15s;
+                button {
+                    border: 1px solid rgba(255, 255, 255, 0.2); background: var(--btn-bg); color: var(--btn-fg);
+                    padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+                    transition: all 0.2s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
                 }
-                #backBtn:hover:not([disabled]), #traceBtn:hover:not([disabled]), #openBtn:hover:not([disabled]) { background: var(--btn-hover); border-color: var(--accent); }
-                #backBtn[disabled], #traceBtn[disabled], #openBtn[disabled] { opacity: 0.4; cursor: default; }
-                #title { font-weight: 700; font-size: 13px; color: var(--fg); }
-                #breadcrumb { font-size: 11px; color: var(--muted); margin-top: 1px; }
-                #hint { font-size: 11px; color: var(--muted); }
-                #picker { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+                button:hover:not([disabled]) { 
+                    background: var(--btn-hover); border-color: rgba(255, 255, 255, 0.4); 
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+                }
+                #traceBtn:hover:not([disabled]) {
+                    background: var(--accent); border-color: #818cf8;
+                    box-shadow: 0 0 12px var(--accent-glow);
+                }
+                button[disabled] { opacity: 0.4; cursor: not-allowed; }
+                
+                #title { font-weight: 700; font-size: 14px; color: var(--fg); text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+                #breadcrumb { font-size: 11px; color: #cbd5e1; margin-top: 2px; }
+                #hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+                
+                #picker { display: flex; gap: 8px; align-items: center; margin-left: auto; }
                 #picker select {
-                    font-size: 12px; padding: 4px 8px; max-width: 280px;
-                    background: var(--input-bg); color: var(--input-fg); border: 1px solid var(--input-border); border-radius: 3px;
+                    font-size: 12px; padding: 6px 10px; max-width: 250px;
+                    background: var(--input-bg); color: var(--input-fg); 
+                    border: 1px solid var(--input-border); border-radius: 5px;
+                    outline: none; transition: border-color 0.2s;
+                    appearance: none;
+                    background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20fill%3D%22%2394a3b8%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M8%2011L3%206h10l-5%205z%22%2F%3E%3C%2Fsvg%3E");
+                    background-repeat: no-repeat; background-position: right 8px center; padding-right: 28px;
                 }
+                #picker select:hover:not([disabled]) { border-color: rgba(255, 255, 255, 0.3); }
+                #picker select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2); }
+                #picker select[disabled] { opacity: 0.4; cursor: not-allowed; }
+
                 #legend {
-                    display: flex; gap: 10px; align-items: center; font-size: 10px; color: var(--muted); flex-wrap: wrap;
+                    display: flex; gap: 10px; align-items: center; font-size: 11px; margin-left: 10px;
                 }
                 #legend .chip {
-                    display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 3px; font-weight: 500;
+                    display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; 
+                    border-radius: 4px; font-weight: 600; text-shadow: none;
+                    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
                 }
-                .chip-frontend { background: #bbf7d0; color: #064e3b; }
-                .chip-backend  { background: #ddd6fe; color: #2e1065; }
-                .chip-db       { background: #bae6fd; color: #0c4a6e; }
-                .chip-cache    { background: #fde68a; color: #713f12; }
-                .chip-external { background: #fecdd3; color: #881337; border: 1px dashed #e11d48; }
-                #diagram-container { width: 100%; height: calc(100% - 70px); margin-top: 70px; display: flex; align-items: center; justify-content: center; }
-                svg { width: 100% !important; height: 100% !important; }
+                /* Needy pastel chips for dark mode */
+                .chip-frontend { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); }
+                .chip-backend  { background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border: 1px solid rgba(139, 92, 246, 0.3); }
+                .chip-db       { background: rgba(14, 165, 233, 0.15); color: #7dd3fc; border: 1px solid rgba(14, 165, 233, 0.3); }
+                .chip-cache    { background: rgba(234, 179, 8, 0.15); color: #fdf08a; border: 1px solid rgba(234, 179, 8, 0.3); }
+                .chip-external { background: rgba(225, 29, 72, 0.15); color: #fda4af; border: 1px solid rgba(225, 29, 72, 0.3); border-style: dashed; }
+                
+                #diagram-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding-top: 60px; box-sizing: border-box; }
+                svg { width: 100% !important; height: 100% !important; transition: opacity 0.3s; }
                 .clickable { cursor: pointer; }
-                .clickable:hover rect, .clickable:hover polygon, .clickable:hover circle, .clickable:hover path { filter: brightness(0.9) drop-shadow(0 0 4px rgba(0,127,212,0.3)); }
+                .clickable:hover rect, .clickable:hover polygon, .clickable:hover circle, .clickable:hover path { 
+                    filter: brightness(1.15) drop-shadow(0 0 6px rgba(255, 255, 255, 0.2)); 
+                }
             </style>
         </head>
         <body>
@@ -3822,28 +3858,32 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                 <div>
                     <div id="title">🗺️ @mapper Architecture</div>
                     <div id="breadcrumb"></div>
-                    <div id="hint">Click a section to expand · Scroll to Zoom · Drag to Pan</div>
+                    <div id="hint">Click sections to explore · Scroll to Zoom · Drag to Pan</div>
                 </div>
                 <div id="legend">
-                    <span class="chip chip-frontend">🖥️ Frontend</span>
+                    <span class="chip chip-frontend">💻 Frontend</span>
                     <span class="chip chip-backend">⚙️ Backend</span>
                     <span class="chip chip-db">🗄️ Data</span>
                     <span class="chip chip-external">🌐 External</span>
                 </div>
-                <div id="picker" title="Jump to a specific object and trace where it is used">
+                <div id="picker" title="Jump to top-level object">
                     <select id="fileSelect">
-                        <option value="">📁 File...</option>
+                        <option value="">📂 Source File...</option>
                     </select>
                     <select id="symbolSelect" disabled>
-                        <option value="">🔍 Object...</option>
+                        <option value="">🔍 Symbol...</option>
                     </select>
                     <button id="traceBtn" disabled>Trace</button>
-                    <button id="openBtn" disabled>Open</button>
+                    <button id="openBtn" disabled>Open code</button>
                 </div>
             </div>
             <div id="diagram-container">
-                <div id="status" style="color: var(--muted);">⌛ Preparing Canvas...</div>
+                <div id="status" style="color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 8px;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 2s linear infinite;"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="4.93" x2="19.07" y2="7.76"></line></svg>
+                    <span>Preparing Canvas...</span>
+                </div>
             </div>
+            <style>@keyframes spin { 100% { transform: rotate(360deg); } }</style>
 
             <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
             <script nonce="${nonce}" type="module">
@@ -3867,9 +3907,23 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                         // Dynamic import so we can surface module-load errors in the UI.
                         const mod = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
                         const mermaid = mod.default ?? mod;
-                        // Detect VS Code theme for Mermaid.
-                        const isDark = document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast');
-                        mermaid.initialize({ startOnLoad: false, theme: isDark ? 'dark' : 'neutral' });
+                        // Force premium dark mode aesthetic on the Mermaid canvas.
+                        mermaid.initialize({ 
+                            startOnLoad: false, 
+                            theme: 'base',
+                            themeVariables: {
+                                fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+                                primaryColor: 'rgba(255,255,255,0.03)',
+                                primaryTextColor: '#e2e8f0',
+                                primaryBorderColor: 'rgba(255,255,255,0.15)',
+                                lineColor: 'rgba(203,213,225,0.4)',
+                                secondaryColor: 'rgba(99,102,241,0.15)',
+                                tertiaryColor: 'transparent',
+                                nodeBorder: 'rgba(255,255,255,0.3)',
+                                clusterBkg: 'rgba(255,255,255,0.02)',
+                                clusterBorder: 'rgba(255,255,255,0.1)'
+                            }
+                        });
 
                         const bstr = atob('${base64Payload}');
                         const u8 = new Uint8Array(bstr.length);
