@@ -2859,10 +2859,10 @@ function buildDeadCodeView(
         return { mermaid: sv.join('\n'), openMap };
     }
 
-    sv.push(`  Header[⚠️ ${deadSymbols.length} unreferenced symbol${deadSymbols.length > 1 ? 's' : ''} found]`);
+    sv.push(`  Header["⚠️ ${deadSymbols.length} unreferenced symbol${deadSymbols.length > 1 ? 's' : ''} · Click any item to open"]`);
     sv.push('  style Header fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#713f12,font-weight:bold');
 
-    // Group by file.
+    // Group by file and cap display to keep the diagram readable.
     const byFile = new Map<string, DeadSymbol[]>();
     for (const d of deadSymbols) {
         const list = byFile.get(d.relPath) || [];
@@ -2870,32 +2870,71 @@ function buildDeadCodeView(
         byFile.set(d.relPath, list);
     }
 
+    const MAX_FILES = 12;        // Max file cards to show
+    const MAX_SYMS_PER_FILE = 5; // Max symbols per file card
+    const COLS = 3;              // Grid columns
+
+    const fileEntries = Array.from(byFile.entries()).slice(0, MAX_FILES);
+    const hiddenFiles = byFile.size - fileEntries.length;
+
+    // Organise files into column groups of COLS each.
+    // Each row-group connects to the header separately so Mermaid renders them roughly as a grid.
     let fileIdx = 0;
-    for (const [relPath, syms] of byFile) {
+    const rowGroups: string[][] = [];
+    let currentRow: string[] = [];
+
+    for (const [relPath, syms] of fileEntries) {
         fileIdx++;
         const fileId = toMermaidId(`df_${fileIdx}`);
-        sv.push(`  subgraph ${fileId}[📄 ${escapeMermaidLabel(relPath)}]`);
+
+        // Short label: just the file name + folder.
+        const parts = relPath.replace(/\\/g, '/').split('/');
+        const shortLabel = parts.length > 1 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : relPath;
+
+        sv.push(`  subgraph ${fileId}["📄 ${escapeMermaidLabel(shortLabel)}"]`);
         sv.push('    direction TB');
 
-        for (let i = 0; i < Math.min(syms.length, 8); i++) {
-            const s = syms[i];
+        const shownSyms = syms.slice(0, MAX_SYMS_PER_FILE);
+        for (let i = 0; i < shownSyms.length; i++) {
+            const s = shownSyms[i];
             const sid = toMermaidId(`dead_${fileIdx}_${i + 1}`);
             const kindIcon = s.kind === 'class' ? '🏗️' : s.kind === 'function' ? '⚡' : '📦';
-            const label = `${kindIcon} ${s.kind}: ${s.name} · L${s.line}`;
-            sv.push(`    ${sid}[${escapeMermaidLabel(label)}]`);
+            const label = `${kindIcon} ${s.name}  L${s.line}`;
+            sv.push(`    ${sid}["${escapeMermaidLabel(label)}"]`);
             sv.push(`    style ${sid} fill:#fecdd3,stroke:#e11d48,stroke-width:1px,color:#881337`);
             openMap[sid] = { filePath: s.filePath, line: s.line };
             openMap[label] = { filePath: s.filePath, line: s.line };
         }
 
-        if (syms.length > 8) {
+        if (syms.length > MAX_SYMS_PER_FILE) {
             const moreId = toMermaidId(`dead_${fileIdx}_more`);
-            sv.push(`    ${moreId}[+${syms.length - 8} more...]`);
-            sv.push(`    style ${moreId} fill:none,stroke:#94a3b8,color:#64748b`);
+            sv.push(`    ${moreId}["+${syms.length - MAX_SYMS_PER_FILE} more symbols"]`);
+            sv.push(`    style ${moreId} fill:none,stroke:#94a3b8,stroke-dasharray:4 4,color:#64748b,font-size:11px`);
         }
 
         sv.push('  end');
-        sv.push(`  Header --> ${fileId}`);
+        currentRow.push(fileId);
+
+        if (currentRow.length === COLS) {
+            rowGroups.push(currentRow);
+            currentRow = [];
+        }
+    }
+    if (currentRow.length > 0) rowGroups.push(currentRow);
+
+    // Link: Header --> each row's first file, and files in a row are chained side-by-side.
+    for (const row of rowGroups) {
+        sv.push(`  Header --> ${row[0]}`);
+        for (let i = 0; i < row.length - 1; i++) {
+            sv.push(`  ${row[i]} ~~~ ${row[i + 1]}`);
+        }
+    }
+
+    if (hiddenFiles > 0) {
+        const moreFilesId = toMermaidId('deadMoreFiles');
+        sv.push(`  ${moreFilesId}["📂 +${hiddenFiles} more file${hiddenFiles > 1 ? 's' : ''} with dead code..."]`);
+        sv.push(`  style ${moreFilesId} fill:none,stroke:#94a3b8,stroke-dasharray:4 4,color:#64748b,font-weight:bold`);
+        sv.push(`  Header --> ${moreFilesId}`);
     }
 
     return { mermaid: sv.join('\n'), openMap };
@@ -3014,110 +3053,91 @@ ${fileList}`;
         subsystemDomains.set(domain, list);
     }
 
-    let domainCounter = 0;
     const sortedDomains = Array.from(subsystemDomains.keys()).sort((a, b) => {
         if (a === 'General Features') return 1;
         if (b === 'General Features') return -1;
         return a.localeCompare(b);
     });
 
-    for (const domainName of sortedDomains) {
-        let nodes = subsystemDomains.get(domainName) || [];
-        if (nodes.length === 0) continue;
+    // ── Build an HTML card-grid instead of Mermaid so layout is always readable ──
+    // The webview renderView() detects the '<!--html-->' prefix and renders as HTML.
+    const kindColors: Record<string, { bg: string; border: string; color: string; label: string }> = {
+        frontend:  { bg: '#bbf7d0', border: '#059669', color: '#064e3b', label: '🖥️ Frontend' },
+        backend:   { bg: '#ddd6fe', border: '#7c3aed', color: '#2e1065', label: '⚙️ Backend' },
+        datastore: { bg: '#bae6fd', border: '#0369a1', color: '#0c4a6e', label: '🗄️ Data' },
+        external:  { bg: '#fecdd3', border: '#e11d48', color: '#881337', label: '🌐 External' },
+        unknown:   { bg: '#f1f5f9', border: '#94a3b8', color: '#334155', label: '📄 Other' },
+    };
 
-        domainCounter++;
-        const domId = 'Domain_' + domainCounter;
+    // Serialise the open-map so the webview JS can wire click-to-open.
+    // We embed it inline in the HTML payload.
+    const htmlParts: string[] = [];
+    htmlParts.push('<!--html-->');
+    htmlParts.push('<style>');
+    htmlParts.push('.dom-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;padding:16px;overflow-y:auto;height:calc(100vh - 80px);box-sizing:border-box;}');
+    htmlParts.push('.dom-card{border:2px solid #6366f1;border-radius:10px;background:#1e1b4b10;padding:12px 14px;display:flex;flex-direction:column;gap:8px;}');
+    htmlParts.push('.dom-card-title{font-size:13px;font-weight:700;color:var(--fg);display:flex;align-items:center;gap:6px;margin-bottom:4px;}');
+    htmlParts.push('.dom-file{border-radius:6px;padding:5px 9px;font-size:11px;font-weight:600;cursor:pointer;transition:filter .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}');
+    htmlParts.push('.dom-file:hover{filter:brightness(0.85);}');
+    htmlParts.push('.dom-more{font-size:11px;color:#64748b;padding:3px 6px;font-style:italic;}');
+    htmlParts.push('.dom-empty{color:#64748b;font-size:12px;padding:40px;text-align:center;}');
+    htmlParts.push('</style>');
 
-        lines.push(`  subgraph ${domId}["🧩 ${escapeMermaidLabel(domainName)} Subsystem"]`);
-        lines.push('    direction LR');
-
-        // Try to draw internal edges: frontend -> backend -> datastore if they exist within the same domain
-        const frontends = nodes.filter(n => n.kind === 'frontend');
-        const backends = nodes.filter(n => n.kind === 'backend');
-        const datastores = nodes.filter(n => n.kind === 'datastore');
-        const externals = nodes.filter(n => n.kind === 'external');
-
-        for (const n of nodes) {
-            let icon = '📄';
-            if (n.kind === 'frontend') icon = '🖥️';
-            else if (n.kind === 'backend') icon = '⚙️';
-            else if (n.kind === 'datastore') icon = '🗄️';
-            else if (n.kind === 'external') icon = '🌐';
-
-            lines.push(`    ${n.id}["${icon} ${escapeMermaidLabel(n.label)}"]`);
-            if (n.kind === 'frontend') lines.push(`    style ${n.id} fill:#bbf7d0,stroke:#059669,color:#064e3b`);
-            if (n.kind === 'backend') lines.push(`    style ${n.id} fill:#ddd6fe,stroke:#7c3aed,color:#2e1065`);
-            if (n.kind === 'datastore') lines.push(`    style ${n.id} fill:#bae6fd,stroke:#0369a1,color:#0c4a6e`);
-            if (n.kind === 'external') lines.push(`    style ${n.id} fill:#fecdd3,stroke:#e11d48,color:#881337`);
-
-            if (n.filePath) {
-                openMap[n.id] = { filePath: n.filePath, line: 1 };
-                openMap[`${icon} ${n.label}`] = { filePath: n.filePath, line: 1 };
-            }
-        }
-
-        lines.push('  end');
-
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    // Draw edges GLOBALLY across all domains
-    // ─────────────────────────────────────────────────────────────────
-    const idToDomId = new Map<string, string>();
-    for (const node of candidateNodes) {
-        idToDomId.set(node.filePath || node.label, node.id);
-        idToDomId.set(node.label, node.id);
-        idToDomId.set(node.label.split('/').pop() || node.label, node.id);
-        if (node.relPath) idToDomId.set(node.relPath, node.id);
-    }
-
-    const addedDomEdges = new Set<string>();
-    for (const edge of scan.edges) {
-        let fromDomId = idToDomId.get(edge.from);
-        if (!fromDomId) {
-            const match = candidateNodes.find(n => n.filePath === edge.from || n.label === edge.from || (n.relPath && n.relPath === edge.from) || edge.from.endsWith(n.label));
-            if (match) fromDomId = match.id;
-        }
-
-        let toDomId = idToDomId.get(edge.to);
-        if (!toDomId) {
-            const match = candidateNodes.find(n => n.filePath === edge.to || n.label === edge.to || (n.relPath && n.relPath === edge.to) || edge.to.endsWith(n.label));
-            if (match) toDomId = match.id;
-        }
-
-        // Draw edge if it crosses architectural boundaries (e.g. frontend -> backend)
-        // OR if it crosses domain boundaries (e.g. Auth Subsystem -> DB Subsystem).
-        if (fromDomId && toDomId && fromDomId !== toDomId) {
-            const fromNode = candidateNodes.find(n => n.id === fromDomId);
-            const toNode = candidateNodes.find(n => n.id === toDomId);
-
-            if (fromNode && toNode) {
-                // If they are in the same kind (e.g., both frontend) AND same domain, skip to avoid clutter
-                // Otherwise, draw the edge (cross-kind or cross-domain)
-                const isCrossKind = fromNode.kind !== toNode.kind;
-                // To check if they cross domains, we can see if fileToDomainMap assigned them differently:
-                const fromDomain = Array.from(subsystemDomains.entries()).find(([_, list]) => list.some(n => n.id === fromNode.id))?.[0];
-                const toDomain = Array.from(subsystemDomains.entries()).find(([_, list]) => list.some(n => n.id === toNode.id))?.[0];
-                const isCrossDomain = fromDomain !== toDomain;
-
-                if (isCrossKind || isCrossDomain) {
-                    const key = `${fromDomId}->${toDomId}`;
-                    if (!addedDomEdges.has(key)) {
-                        addedDomEdges.add(key);
-                        const lbl = edge.label ? `|${escapeMermaidLabel(edge.label)}|` : '';
-                        lines.push(`  ${fromDomId} -->${lbl} ${toDomId}`);
-                    }
+    if (sortedDomains.length === 0) {
+        htmlParts.push('<div class="dom-empty">No subsystems detected.</div>');
+    } else {
+        // Encode the openMap inline for click handlers.
+        const openMapEncoded = JSON.stringify(openMap);
+        htmlParts.push(`<script id="__domOpen" type="application/json">${openMapEncoded}</script>`);
+        htmlParts.push('<div class="dom-grid">');
+        for (const domainName of sortedDomains) {
+            const nodes = subsystemDomains.get(domainName) || [];
+            if (nodes.length === 0) continue;
+            htmlParts.push('<div class="dom-card">');
+            htmlParts.push(`<div class="dom-card-title">🧩 ${escapeHtml(domainName)}</div>`);
+            const MAX_SHOWN = 8;
+            for (const n of nodes.slice(0, MAX_SHOWN)) {
+                const c = kindColors[n.kind] || kindColors.unknown;
+                const fileId = n.id;  // use node id as data attribute for click lookup
+                if (n.filePath) {
+                    openMap[n.id] = { filePath: n.filePath, line: 1 };
                 }
+                htmlParts.push(`<div class="dom-file" style="background:${c.bg};border:1px solid ${c.border};color:${c.color}" data-domid="${escapeHtml(fileId)}" title="${escapeHtml(n.relPath)}">${escapeHtml(n.label)}</div>`);
             }
+            if (nodes.length > MAX_SHOWN) {
+                htmlParts.push(`<div class="dom-more">+${nodes.length - MAX_SHOWN} more files...</div>`);
+            }
+            htmlParts.push('</div>');
         }
+        htmlParts.push('</div>');
+        // Wire clicks using a script that reads the embedded JSON and attaches click handlers.
+        // Use double-quotes inside the JS strings so we don't need escaping in TS.
+        const clickScript = [
+            '(function() {',
+            '  try {',
+            '    var el = document.getElementById("__domOpen");',
+            '    var om = el ? JSON.parse(el.textContent || "{}") : {};',
+            '    document.querySelectorAll(".dom-file").forEach(function(node) {',
+            '      node.addEventListener("click", function() {',
+            '        var id = node.dataset.domid;',
+            '        var info = om[id];',
+            '        if (info && window.__vscodeApi) {',
+            '          window.__vscodeApi.postMessage({ type: "open", filePath: info.filePath, line: info.line || 1 });',
+            '        }',
+            '      });',
+            '    });',
+            '  } catch(e) {}',
+            '})();',
+        ].join('\n');
+        htmlParts.push(`<script id="__domScript">${clickScript}</script>`);
     }
 
-    if (domainCounter === 0) {
-        lines.push('  Empty[No subdomains detected]');
+    // Also populate openMap with all nodes for the standard wire-clickable path.
+    for (const node of candidateNodes) {
+        if (node.filePath) openMap[node.id] = { filePath: node.filePath, line: 1 };
     }
 
-    const built = lines.join('\n');
-    return { mermaid: addClassStyling(built), openMap, navMap };
+    return { mermaid: htmlParts.join('\n'), openMap, navMap };
 }
 
 async function buildPreviewFromScan(scan: WorkspaceScan): Promise<MermaidPreview> {
@@ -3305,6 +3325,42 @@ async function buildPreviewFromScan(scan: WorkspaceScan): Promise<MermaidPreview
     return { startViewId: 'overview', views, navByViewId, openByViewId, catalog, dataFlowMeta };
 }
 
+/** Returns a short human-readable role hint for a file based on its path and name. */
+function inferFileRole(rel: string, kind: ScanNodeKind): string {
+    const r = rel.toLowerCase();
+    if (kind === 'frontend') {
+        if (/page|screen|view/i.test(r)) return 'page';
+        if (/component|widget|card|button|input|modal/i.test(r)) return 'component';
+        if (/layout|template/i.test(r)) return 'layout';
+        if (/hook|use[A-Z]/i.test(r)) return 'hook';
+        if (/store|context|redux|zustand|recoil/i.test(r)) return 'state';
+        if (/router|navigation/i.test(r)) return 'router';
+        if (/style|css|scss|less/i.test(r)) return 'styles';
+        if (/util|helper|format/i.test(r)) return 'utility';
+        if (/app\.(ts|tsx|js|jsx|py)$/i.test(r)) return 'entry point';
+        return 'UI file';
+    }
+    if (kind === 'backend') {
+        if (/route|router|controller/i.test(r)) return 'router';
+        if (/service|manager|handler/i.test(r)) return 'service';
+        if (/middleware|guard|interceptor/i.test(r)) return 'middleware';
+        if (/model|entity|schema/i.test(r)) return 'model';
+        if (/auth|jwt|token|session/i.test(r)) return 'auth';
+        if (/util|helper|format/i.test(r)) return 'utility';
+        if (/main|app|server|index/i.test(r)) return 'entry point';
+        if (/config|settings/i.test(r)) return 'config';
+        return 'API file';
+    }
+    if (kind === 'datastore') {
+        if (/migration|seed/i.test(r)) return 'migration';
+        if (/model|entity|schema/i.test(r)) return 'model';
+        if (/repository|repo|query|dao/i.test(r)) return 'repository';
+        if (/connection|pool|client/i.test(r)) return 'connection';
+        return 'data file';
+    }
+    return 'file';
+}
+
 function buildSectionView(
     scan: WorkspaceScan,
     kind: ScanNodeKind,
@@ -3315,29 +3371,28 @@ function buildSectionView(
 ): string {
     const lines: string[] = [];
     lines.push('flowchart TB');
-    lines.push(`  ${rootId}[${escapeMermaidLabel(title)}]`);
 
     const rawDetails = scan.detailsByKind[kind] || [];
 
     // Filter out build artifacts, chunks, vendored, generated files.
     const NOISE_PATTERNS = [
-        /\.chunk\.\w+$/i,          // Webpack chunks
-        /\.min\.\w+$/i,            // Minified files
-        /\.map$/i,                 // Sourcemaps
-        /\.bundle\.\w+$/i,         // Bundled files
-        /\.compiled\.\w+$/i,       // Compiled output
-        /\.generated\.\w+$/i,      // Generated files
-        /[\\/]dist[\\/]/i,         // dist/ folder
-        /[\\/]build[\\/]/i,        // build/ folder
-        /[\\/]\.next[\\/]/i,       // Next.js build
-        /[\\/]out[\\/]/i,          // out/ folder
-        /[\\/]coverage[\\/]/i,     // coverage reports
-        /[\\/]__pycache__[\\/]/i,  // Python cache
-        /[\\/]\.history[\\/]/i,    // History files
-        /[\\/]node_modules[\\/]/i, // Dependencies
-        /[\\/]venv[\\/]/i,         // Virtual env
-        /[\\/]\.venv[\\/]/i,       // Virtual env
-        /package-lock\.json$/i,    // Lock files
+        /\.chunk\.\w+$/i,
+        /\.min\.\w+$/i,
+        /\.map$/i,
+        /\.bundle\.\w+$/i,
+        /\.compiled\.\w+$/i,
+        /\.generated\.\w+$/i,
+        /[\\/]dist[\\/]/i,
+        /[\\/]build[\\/]/i,
+        /[\\/]\.next[\\/]/i,
+        /[\\/]out[\\/]/i,
+        /[\\/]coverage[\\/]/i,
+        /[\\/]__pycache__[\\/]/i,
+        /[\\/]\.history[\\/]/i,
+        /[\\/]node_modules[\\/]/i,
+        /[\\/]venv[\\/]/i,
+        /[\\/]\.venv[\\/]/i,
+        /package-lock\.json$/i,
         /yarn\.lock$/i,
         /pnpm-lock\.yaml$/i,
     ];
@@ -3347,24 +3402,59 @@ function buildSectionView(
         return !NOISE_PATTERNS.some(p => p.test(label));
     });
 
+    // Pre-compute symbol counts per file for richer labels.
+    const symCountByFile = new Map<string, { funcs: number; classes: number }>();
+    for (const s of scan.symbols) {
+        const cur = symCountByFile.get(s.filePath) || { funcs: 0, classes: 0 };
+        if (s.kind === 'function') cur.funcs++;
+        if (s.kind === 'class') cur.classes++;
+        symCountByFile.set(s.filePath, cur);
+    }
+
+    // Count routes per file.
+    const routeCountByFile = new Map<string, number>();
+    for (const reg of (scan.frameworkRegistrations || [])) {
+        if (reg.kind === 'route' || reg.kind === 'urlpattern') {
+            routeCountByFile.set(reg.filePath, (routeCountByFile.get(reg.filePath) || 0) + 1);
+        }
+    }
+
+    // Summary header node.
+    const routeTotal = details.reduce((acc, d) => acc + (d.filePath ? (routeCountByFile.get(d.filePath) || 0) : 0), 0);
+    const funcTotal  = details.reduce((acc, d) => acc + (d.filePath ? (symCountByFile.get(d.filePath)?.funcs || 0) : 0), 0);
+    const headerLabel = routeTotal > 0
+        ? `${escapeMermaidLabel(title)} · ${details.length} files · ${routeTotal} routes · ${funcTotal} fns`
+        : `${escapeMermaidLabel(title)} · ${details.length} files · ${funcTotal} fns`;
+    lines.push(`  ${rootId}["${headerLabel}"]`);
+    lines.push(`  style ${rootId} fill:#e0e7ff,stroke:#6366f1,stroke-width:2px,color:#1e1b4b,font-weight:bold`);
+
     if (details.length === 0) {
         lines.push(`  ${rootId} --> Empty[No ${escapeMermaidLabel(title)} source files detected]`);
         return lines.join('\n');
     }
 
-    // Group by top-level directory to avoid one gigantic horizontal row.
-    const groups = new Map<string, Array<{ rel: string; fileName: string; filePath?: string }>>();
+    // Group by top-level directory.
+    const groups = new Map<string, Array<{ rel: string; fileName: string; filePath?: string; role: string; symInfo: string }>>(); 
     for (const d of details) {
-        const rel = d.label.replace(/\\/g, '/');
+        const rel = (d.relPath || d.label).replace(/\\/g, '/');
         const top = rel.includes('/') ? rel.split('/')[0] : '(root)';
         const fileName = rel.includes('/') ? rel.split('/').pop() || rel : rel;
+        const role = inferFileRole(rel, kind);
+        // Build a compact symbol info badge: e.g. "3fn" or "1cls 5fn" or "2routes"
+        const counts = d.filePath ? symCountByFile.get(d.filePath) : undefined;
+        const routes = d.filePath ? (routeCountByFile.get(d.filePath) || 0) : 0;
+        const badges: string[] = [];
+        if (routes > 0) badges.push(`${routes}🛤️`);
+        if (counts?.classes) badges.push(`${counts.classes}cls`);
+        if (counts?.funcs) badges.push(`${counts.funcs}fn`);
+        const symInfo = badges.join(' ');
         const list = groups.get(top) || [];
-        list.push({ rel, fileName, filePath: d.filePath });
+        list.push({ rel, fileName, filePath: d.filePath, role, symInfo });
         groups.set(top, list);
     }
 
     const groupNames = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b));
-    const maxGroups = 6;
+    const maxGroups = 8;
     const shownGroups = groupNames.slice(0, maxGroups);
     const hiddenGroups = groupNames.length - shownGroups.length;
 
@@ -3373,24 +3463,27 @@ function buildSectionView(
         groupIndex++;
         const groupId = toMermaidId(`${rootId}_grp_${groupIndex}`);
         lines.push(`  ${rootId} --> ${groupId}`);
-        lines.push(`  subgraph ${groupId}[📂 ${escapeMermaidLabel(groupName)}]`);
+        lines.push(`  subgraph ${groupId}["📂 ${escapeMermaidLabel(groupName)}"]`);
         lines.push('    direction TB');
 
         const items = (groups.get(groupName) || []).slice(0, 8);
         const nodeIds: string[] = [];
         for (let i = 0; i < items.length; i++) {
+            const item = items[i];
             const id = toMermaidId(`${rootId}_${groupIndex}_${i + 1}`);
             nodeIds.push(id);
-            lines.push(`    ${id}[${escapeMermaidLabel(items[i].fileName)}]`);
+            // Rich label: filename + role badge + symbol counts
+            const roleTag = item.role ? ` [${item.role}]` : '';
+            const symTag = item.symInfo ? ` · ${item.symInfo}` : '';
+            const richLabel = `${item.fileName}${roleTag}${symTag}`;
+            lines.push(`    ${id}["${escapeMermaidLabel(richLabel)}"]`);
 
-            // Allow clicking to jump to the file from the details grouping
-            if (openMap && items[i].filePath) {
-                openMap[id] = { filePath: items[i].filePath!, line: 1 };
-                openMap[items[i].fileName] = { filePath: items[i].filePath!, line: 1 };
+            if (openMap && item.filePath) {
+                openMap[id] = { filePath: item.filePath, line: 1 };
+                openMap[item.fileName] = { filePath: item.filePath, line: 1 };
             }
         }
 
-        // Chain nodes vertically for cleaner layout within each group.
         for (let i = 0; i < nodeIds.length - 1; i++) {
             lines.push(`    ${nodeIds[i]} --> ${nodeIds[i + 1]}`);
         }
@@ -3398,7 +3491,7 @@ function buildSectionView(
         const extra = (groups.get(groupName) || []).length - items.length;
         if (extra > 0) {
             const moreId = toMermaidId(`${rootId}_${groupIndex}_more`);
-            lines.push(`    ${moreId}[${escapeMermaidLabel(`+${extra} more...`)}]`);
+            lines.push(`    ${moreId}["+${extra} more..."]`);
             if (nodeIds.length > 0) {
                 lines.push(`    ${nodeIds[nodeIds.length - 1]} --> ${moreId}`);
             }
@@ -3409,10 +3502,19 @@ function buildSectionView(
 
     if (hiddenGroups > 0) {
         const moreGroupsId = toMermaidId(`${rootId}_more_groups`);
-        lines.push(`  ${rootId} --> ${moreGroupsId}[${escapeMermaidLabel(`+${hiddenGroups} more folders...`)}]`);
+        lines.push(`  ${rootId} --> ${moreGroupsId}["+${hiddenGroups} more folder${hiddenGroups > 1 ? 's' : ''}..."]`);
     }
 
     return lines.join('\n');
+}
+
+function escapeHtml(text: string): string {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function toMermaidId(input: string): string {
@@ -3877,6 +3979,32 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                 throw new Error("Missing Mermaid view: " + viewId);
                             }
 
+                            // ── HTML view (e.g. Domains page) ──
+                            if (code.startsWith('<!--html-->')) {
+                                if (pushStack) stack.push(currentViewId);
+                                currentViewId = viewId;
+                                backBtn.disabled = stack.length === 0;
+                                var prettyNamesH = { overview: 'Architecture Overview', frontend: 'Frontend', backend: 'Backend / API', datastore: 'Data Store', external: 'External Services', modules: 'Module Import Map', routes: 'API Routes', deadcode: 'Dead Code', domains: 'Subsystems / Domains' };
+                                titleEl.textContent = '\u{1F5FA}\u{FE0F} ' + (prettyNamesH[viewId] || viewId);
+                                breadcrumbEl.textContent = stack.slice().concat([viewId]).map(function(v){return prettyNamesH[v]||v;}).join(' \u203A ');
+                                hintEl.textContent = 'Click a file card to open it in the editor';
+                                try { panZoomInstance && panZoomInstance.destroy && panZoomInstance.destroy(); } catch {}
+                                panZoomInstance = null;
+                                // Strip the sentinel prefix and inject the HTML.
+                                var htmlContent = code.replace('<!--html-->', '');
+                                container.style.overflowY = 'auto';
+                                container.style.alignItems = 'flex-start';
+                                container.style.justifyContent = 'flex-start';
+                                container.innerHTML = htmlContent;
+                                // Store vscodeApi ref so inline click scripts can use it.
+                                window.__vscodeApi = vscode;
+                                // Re-run any embedded <script id="__domScript"> tags.
+                                var sc = container.querySelector('#__domScript');
+                                if (sc) { try { (new Function(sc.textContent || ''))(); } catch {} }
+                                // After rendering HTML view, reset container style on next Mermaid render.
+                                return;
+                            }
+
                             if (pushStack) stack.push(currentViewId);
                             currentViewId = viewId;
 
@@ -3891,7 +4019,10 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                             var trail = stack.slice().concat([viewId]);
                             breadcrumbEl.textContent = trail.map(function(v) { return prettyNames[v] || v; }).join(' \u203A ');
 
-                            // Render fresh SVG.
+                            // Render fresh SVG. Reset any styles set by HTML views.
+                            container.style.overflowY = '';
+                            container.style.alignItems = '';
+                            container.style.justifyContent = '';
                             const { svg } = await mermaid.render('mermaid-svg', code);
                             container.innerHTML = svg;
 
