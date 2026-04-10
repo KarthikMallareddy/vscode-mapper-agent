@@ -4,6 +4,80 @@ import { getCachedScan, setCachedScan, invalidateCache, initCacheWatcher } from 
 import { getSymbolsForFile, getReferencesForSymbol, getDefinitionLocation } from './symbolIndex';
 import { detectFrameworkRegistrations, detectActiveFrameworks, FrameworkRegistration } from './frameworkDetectors';
 import { buildModuleGraph, buildModuleGraphMermaid } from './moduleGraph';
+import * as fs from 'fs';
+import { execSync } from 'child_process';
+
+// ─────────────────────────────────────────────────────────────────
+// Scrum Goals Backend
+// ─────────────────────────────────────────────────────────────────
+export interface ScrumGoal {
+    id: string;
+    title: string;
+    completed: boolean;
+    completedBy?: string;
+    commitHash?: string;
+    createdAt: string;
+}
+
+export function getScrumGoals(rootPath: string): ScrumGoal[] {
+    const scrumPath = path.join(rootPath, '.mapper', 'scrum.json');
+    if (!fs.existsSync(scrumPath)) return [];
+    try { return JSON.parse(fs.readFileSync(scrumPath, 'utf8')); } catch { return []; }
+}
+
+export function saveScrumGoals(rootPath: string, goals: ScrumGoal[]) {
+    const mapperDir = path.join(rootPath, '.mapper');
+    if (!fs.existsSync(mapperDir)) fs.mkdirSync(mapperDir, { recursive: true });
+    fs.writeFileSync(path.join(mapperDir, 'scrum.json'), JSON.stringify(goals, null, 2), 'utf8');
+}
+
+export async function detectScrumCompletions(rootPath: string) {
+    const goals = getScrumGoals(rootPath);
+    const openGoals = goals.filter(g => !g.completed);
+    if (openGoals.length === 0) return;
+
+    let rawLog = '';
+    try { rawLog = execSync('git log -n 30 --pretty=format:"%H|%an|%s" --date=short', { cwd: rootPath, encoding: 'utf8' }).trim(); } catch { return; }
+    if (!rawLog) return;
+
+    const commits = rawLog.split('\n').filter(Boolean).map(line => {
+        const parts = line.split('|');
+        return { hash: parts[0], author: parts[1], msg: parts.slice(2).join('|') };
+    });
+
+    try {
+        const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
+        if (!models || models.length === 0) return;
+        const model = models[0];
+
+        const prompt = `You are a Scrum Master AI. Evaluate these Recent Commits against the Open Goals to see if any commits completely fulfill a goal.
+Open Goals: ${JSON.stringify(openGoals)}
+Recent Commits: ${JSON.stringify(commits)}
+
+Return ONLY a valid JSON array mapping the goal ID to the commit Hash and Author that completed it. Example: [{"goalId":"123","commitHash":"abc1234","author":"John Doe"}]
+If no commit strongly matches a goal, return []. Do not add any markdown formatting or text outside JSON.`;
+
+        const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, new vscode.CancellationTokenSource().token);
+        let responseText = '';
+        for await (const chunk of response.text) responseText += chunk;
+        const jsonStr = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const matches = JSON.parse(jsonStr) as Array<{ goalId: string; commitHash: string; author: string }>;
+
+        let updated = false;
+        for (const match of matches) {
+            const goal = goals.find(g => g.id === match.goalId);
+            if (goal && !goal.completed) {
+                goal.completed = true;
+                goal.completedBy = match.author;
+                goal.commitHash = match.commitHash;
+                updated = true;
+            }
+        }
+        if (updated) saveScrumGoals(rootPath, goals);
+    } catch (e) {
+        console.error("Scrum LLM mapping failed", e);
+    }
+}
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('@mapper is now active!');
