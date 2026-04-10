@@ -4405,7 +4405,7 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                         });
 
                         scrumBtn.addEventListener('click', () => {
-                            if (pushStack) { stack.push(currentViewId); backBtn.disabled = stack.length === 0; }
+                            stack.push(currentViewId); backBtn.disabled = stack.length === 0;
                             container.style.display = 'none';
                             scrumContainer.style.display = 'block';
                             titleEl.textContent = '📋 Scrum Tracker';
