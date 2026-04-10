@@ -46,6 +46,10 @@
           {
             "name": "export",
             "description": "Export the project architecture as an ARCHITECTURE.md file."
+          },
+          {
+            "name": "scrumtracker",
+            "description": "Open the AI-mapped Git Scrum Tracker."
           }
         ]
       }

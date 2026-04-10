@@ -119,6 +119,27 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
+        if (request.command === 'scrumtracker') {
+            response.markdown("📋 **Loading AI-Mapped Scrum Tracker...**\n\n");
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) return;
+            const rootPath = workspaceFolders[0].uri.fsPath;
+
+            try {
+                let scan = getCachedScan(rootPath);
+                if (!scan) {
+                    scan = await scanWorkspace(rootPath);
+                    setCachedScan(rootPath, scan);
+                }
+                const preview = await buildPreviewFromScan(scan);
+                preview.startViewId = 'scrum';
+                openMermaidPreview(preview, rootPath);
+            } catch (err: any) {
+                response.markdown(`❌ **Error:** ${err.message}`);
+            }
+            return;
+        }
+
         if (request.command === 'trace') {
             const symbolName = (request.prompt || '').trim();
             if (!symbolName) {
@@ -4491,7 +4512,11 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                             }
                         });
 
-                        await renderView(currentViewId, false);
+                        if (currentViewId === 'scrum') {
+                            scrumBtn.click();
+                        } else {
+                            await renderView(currentViewId, false);
+                        }
                     } catch (e) {
                         showError(e?.message || String(e));
                     }
