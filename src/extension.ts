@@ -3824,6 +3824,37 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
             }
             return;
         }
+
+        if (message.type === 'scrumView') {
+            try {
+                await detectScrumCompletions(rootPath);
+                const goals = getScrumGoals(rootPath);
+                panel.webview.postMessage({ type: 'scrumResult', goals });
+            } catch(e: any) {
+                panel.webview.postMessage({ type: 'error', message: `@mapper: Scrum check failed: ${e?.message || String(e)}` });
+            }
+            return;
+        }
+
+        if (message.type === 'addGoal') {
+            try {
+                const title = String(message.title || '').trim();
+                if (title) {
+                    const goals = getScrumGoals(rootPath);
+                    goals.push({ 
+                        id: Math.random().toString(36).substring(2, 9), 
+                        title, 
+                        completed: false, 
+                        createdAt: new Date().toISOString() 
+                    });
+                    saveScrumGoals(rootPath, goals);
+                    panel.webview.postMessage({ type: 'scrumResult', goals });
+                }
+            } catch(e: any) {
+                panel.webview.postMessage({ type: 'error', message: `@mapper: Add goal failed: ${e?.message || String(e)}` });
+            }
+            return;
+        }
     });
 
     panel.webview.html = `
@@ -3924,6 +3955,19 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                 .clickable:hover rect, .clickable:hover polygon, .clickable:hover circle, .clickable:hover path { 
                     filter: brightness(1.15) drop-shadow(0 0 6px rgba(255, 255, 255, 0.2)); 
                 }
+                
+                /* Scrum UI Styles */
+                .scrum-board { display: flex; gap: 20px; padding: 20px; min-height: calc(100vh - 100px); align-items: flex-start; justify-content: center; }
+                .scrum-col { width: 400px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 18px; min-height: 500px; display: flex; flex-direction: column; gap: 14px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); }
+                .scrum-col-title { font-weight: 700; font-size: 15px; color: var(--fg); margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+                .scrum-card { background: rgba(15, 17, 26, 0.9); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: transform 0.2s; }
+                .scrum-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.2); }
+                .scrum-card.completed { border-color: rgba(16, 185, 129, 0.5); background: linear-gradient(180deg, rgba(16,185,129,0.05) 0%, rgba(15,17,26,0.9) 100%); }
+                .scrum-card-title { font-weight: 600; font-size: 14px; margin-bottom: 12px; line-height: 1.4; }
+                .scrum-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+                .scrum-input { background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff; padding: 10px 12px; border-radius: 6px; width: calc(100% - 26px); outline: none; margin-bottom: 4px; font-size: 13px; font-family: inherit; }
+                .scrum-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+                .badge { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: #6ee7b7; padding: 3px 8px; border-radius: 5px; font-weight: 600; font-size: 10px; }
             </style>
         </head>
         <body>
@@ -3939,6 +3983,7 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                     <span class="chip chip-backend">⚙️ Backend</span>
                     <span class="chip chip-db">🗄️ Data</span>
                     <span class="chip chip-external">🌐 External</span>
+                    <button id="scrumBtn" style="margin-left: 12px; background: rgba(99, 102, 241, 0.2); border-color: #6366f1; color: #c4b5fd;">📋 Scrum Tracker</button>
                 </div>
                 <div id="picker" title="Jump to top-level object">
                     <select id="fileSelect">
@@ -3957,6 +4002,19 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                     <span>Preparing Canvas...</span>
                 </div>
             </div>
+            <div id="scrum-container" style="display:none; width: 100%; height: 100%; padding-top: 70px; overflow-y: auto; box-sizing: border-box; background: var(--bg);">
+                <div class="scrum-board">
+                    <div class="scrum-col" id="col-todo">
+                        <div class="scrum-col-title"><span>📌 To Do / Active</span> <span id="todo-count" style="color:#64748b; font-size:12px;">0</span></div>
+                        <input type="text" id="newGoalInput" class="scrum-input" placeholder="Type a new goal and press Enter...">
+                        <div id="scrum-todo-list" style="display:flex; flex-direction:column; gap:12px;"></div>
+                    </div>
+                    <div class="scrum-col" id="col-done">
+                        <div class="scrum-col-title"><span>✅ Ready for Review</span> <span id="done-count" style="color:#64748b; font-size:12px;">0</span></div>
+                        <div id="scrum-done-list" style="display:flex; flex-direction:column; gap:12px;"></div>
+                    </div>
+                </div>
+            </div>
             <style>@keyframes spin { 100% { transform: rotate(360deg); } }</style>
 
             <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
@@ -3971,6 +4029,9 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                 const symbolSelect = document.getElementById('symbolSelect');
                 const traceBtn = document.getElementById('traceBtn');
                 const openBtn = document.getElementById('openBtn');
+                const scrumBtn = document.getElementById('scrumBtn');
+                const scrumContainer = document.getElementById('scrum-container');
+                const newGoalInput = document.getElementById('newGoalInput');
 
                 function showError(message) {
                     container.innerHTML = "<div style='color:red; padding:20px; max-width: 900px;'><b>Render Error:</b><br/>" + message + "</div>";
@@ -4082,6 +4143,9 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                         }
 
                         async function renderView(viewId, pushStack) {
+                            if (scrumContainer) scrumContainer.style.display = 'none';
+                            if (container) container.style.display = 'flex';
+                            
                             const code = views[viewId];
                             if (!code) {
                                 if (String(viewId || '').startsWith('symbol_')) {
@@ -4340,6 +4404,24 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                             vscode.postMessage({ type: 'open', filePath: fp, line: 1 });
                         });
 
+                        scrumBtn.addEventListener('click', () => {
+                            if (pushStack) { stack.push(currentViewId); backBtn.disabled = stack.length === 0; }
+                            container.style.display = 'none';
+                            scrumContainer.style.display = 'block';
+                            titleEl.textContent = '📋 Scrum Tracker';
+                            breadcrumbEl.textContent = 'Active Goals mapping to Git';
+                            hintEl.textContent = 'Auto-detecting completions...';
+                            vscode.postMessage({ type: 'scrumView' });
+                        });
+
+                        newGoalInput.addEventListener('keypress', (e) => {
+                            if (e.key === 'Enter' && newGoalInput.value.trim()) {
+                                vscode.postMessage({ type: 'addGoal', title: newGoalInput.value.trim() });
+                                newGoalInput.value = '';
+                                newGoalInput.placeholder = 'Adding...';
+                            }
+                        });
+
                         populateFileSelect();
 
                         // Cache of DocumentSymbolProvider results by relPath.
@@ -4374,6 +4456,34 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                 } catch (e) {
                                     showError(e?.message || String(e));
                                 }
+                            }
+
+                            if (msg.type === 'scrumResult') {
+                                const listTodo = document.getElementById('scrum-todo-list');
+                                const listDone = document.getElementById('scrum-done-list');
+                                const cTodo = document.getElementById('todo-count');
+                                const cDone = document.getElementById('done-count');
+                                if (listTodo) listTodo.innerHTML = ''; 
+                                if (listDone) listDone.innerHTML = '';
+                                let td = 0, dn = 0;
+                                
+                                (msg.goals || []).forEach(g => {
+                                    const d = new Date(g.createdAt).toLocaleDateString();
+                                    const meta = g.completed ? 
+                                        '<span class="badge">Autocompleted By ' + (g.completedBy || 'Unknown') + '</span> <span style="font-family:monospace;">' + (g.commitHash ? g.commitHash.slice(0,7) : '') + '</span>' : 
+                                        '<span>' + d + '</span>';
+                                    
+                                    const card = '<div class="scrum-card ' + (g.completed ? 'completed' : '') + '">' +
+                                        '<div class="scrum-card-title">' + g.title + '</div>' +
+                                        '<div class="scrum-meta">' + meta + '</div>' +
+                                    '</div>';
+                                    
+                                    if (g.completed) { if (listDone) listDone.innerHTML += card; dn++; } 
+                                    else { if (listTodo) listTodo.innerHTML += card; td++; }
+                                });
+                                if (cTodo) cTodo.textContent = td;
+                                if (cDone) cDone.textContent = dn;
+                                if (newGoalInput) newGoalInput.placeholder = 'Type a new goal and press Enter...';
                             }
 
                             if (msg.type === 'error') {
