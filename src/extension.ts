@@ -140,87 +140,7 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        if (request.command === 'trace') {
-            const symbolName = (request.prompt || '').trim();
-            if (!symbolName) {
-                response.markdown('Usage: `@mapper /trace <symbolName>` — traces where a symbol is defined and referenced.');
-                return;
-            }
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders) return;
-            const rootPath = workspaceFolders[0].uri.fsPath;
 
-            response.markdown(`🔍 Tracing **${symbolName}**...\n\n`);
-            try {
-                let scan = getCachedScan(rootPath);
-                if (!scan) {
-                    scan = await scanWorkspace(rootPath);
-                    setCachedScan(rootPath, scan);
-                }
-                // Find symbol in scan results.
-                const sym = scan.symbols.find((s: any) => s.name === symbolName);
-                if (!sym) {
-                    response.markdown(`⚠️ Symbol **${symbolName}** not found in the current scan. Run \`/draw\` first, then try again.`);
-                    return;
-                }
-                const refs = await getReferencesForSymbol(rootPath, sym.filePath, sym.line, 0);
-                response.markdown(`📌 **Defined in:** \`${sym.relPath}:${sym.line}\`\n\n`);
-                if (refs.length === 0) {
-                    response.markdown('No cross-file references found.');
-                } else {
-                    response.markdown(`**Referenced in ${refs.length} location(s):**\n`);
-                    for (const r of refs) {
-                        response.markdown(`- \`${r.relPath}:${r.line}\` ${r.note || ''}\n`);
-                    }
-                }
-            } catch (err: any) {
-                response.markdown(`❌ Error: ${err.message}`);
-            }
-            return;
-        }
-
-        if (request.command === 'path') {
-            const routeQuery = (request.prompt || '').trim();
-            if (!routeQuery) {
-                response.markdown('Usage: `@mapper /path <route>` — traces a request from route decorator to handler to DB/external calls.\n\nExample: `@mapper /path /api/users`');
-                return;
-            }
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders) return;
-            const rootPath = workspaceFolders[0].uri.fsPath;
-
-            response.markdown(`🛤️ Tracing request path for **${routeQuery}**...\n\n`);
-            try {
-                let scan = getCachedScan(rootPath);
-                if (!scan) {
-                    scan = await scanWorkspace(rootPath);
-                    setCachedScan(rootPath, scan);
-                }
-                const regs: FrameworkRegistration[] = scan.frameworkRegistrations || [];
-                const matching = regs.filter(r => r.kind === 'route' && r.name.toLowerCase().includes(routeQuery.toLowerCase()));
-                if (matching.length === 0) {
-                    response.markdown(`⚠️ No routes matching **${routeQuery}** found. Make sure the project has been scanned with \`/draw\` first.`);
-                    return;
-                }
-                for (const route of matching) {
-                    response.markdown(`### ${route.name}\n`);
-                    response.markdown(`📍 **Defined in:** \`${route.relPath}:${route.line}\`\n`);
-                    if (route.meta) response.markdown(`🏷️ Method: \`${route.meta}\`\n`);
-                    // Try to trace deeper: find the handler function and its dependencies.
-                    const refs = await getReferencesForSymbol(rootPath, route.filePath, route.line, 0);
-                    if (refs.length > 0) {
-                        response.markdown(`\n**Calls / References:**\n`);
-                        for (const r of refs.slice(0, 10)) {
-                            response.markdown(`- \`${r.relPath}:${r.line}\`\n`);
-                        }
-                    }
-                    response.markdown('\n---\n');
-                }
-            } catch (err: any) {
-                response.markdown(`❌ Error: ${err.message}`);
-            }
-            return;
-        }
 
         if (request.command === 'config') {
             const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -491,71 +411,7 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        if (request.command === 'summary') {
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders) {
-                response.markdown('⚠️ No workspace folder open.');
-                return;
-            }
-            const rootPath = workspaceFolders[0].uri.fsPath;
-            response.markdown('📋 **Generating Daily Standup Summary...**\n\n');
 
-            try {
-                const { execSync } = require('child_process') as typeof import('child_process');
-
-                // Get author email from git config.
-                let authorEmail = '';
-                try {
-                    authorEmail = execSync('git config user.email', { cwd: rootPath, encoding: 'utf8' }).trim();
-                } catch { /* no git config — will fetch all authors */ }
-
-                // Fetch commits from the last 7 days.
-                const sinceArg = '--since="7 days ago"';
-                const authorArg = authorEmail ? `--author="${authorEmail}"` : '';
-                const logCmd = `git log ${sinceArg} ${authorArg} --pretty=format:"%ad|%s|%H" --date=short`;
-
-                let rawLog = '';
-                try {
-                    rawLog = execSync(logCmd, { cwd: rootPath, encoding: 'utf8' }).trim();
-                } catch {
-                    response.markdown('⚠️ Could not read git log. Make sure this is a git repository.');
-                    return;
-                }
-
-                if (!rawLog) {
-                    response.markdown('_No commits found in the last 7 days._\n');
-                    return;
-                }
-
-                // Group commits by date.
-                const byDate: Record<string, string[]> = {};
-                for (const line of rawLog.split('\n')) {
-                    const parts = line.split('|');
-                    if (parts.length < 2) continue;
-                    const date = parts[0].trim();
-                    const subject = parts[1].trim();
-                    if (!byDate[date]) byDate[date] = [];
-                    byDate[date].push(subject);
-                }
-
-                const today = new Date().toISOString().split('T')[0];
-                const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-
-                for (const [date, commits] of Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0]))) {
-                    const label = date === today ? '🟢 Today' : date === yesterday ? '🟡 Yesterday' : `📅 ${date}`;
-                    response.markdown(`### ${label}\n`);
-                    for (const c of commits) response.markdown(`- ${c}\n`);
-                    response.markdown('\n');
-                }
-
-                if (authorEmail) {
-                    response.markdown(`\n_Showing commits by **${authorEmail}**. Use \`mapper.resetApiKey\` or switch git user to change._\n`);
-                }
-            } catch (err: any) {
-                response.markdown(`❌ Error: ${err.message}`);
-            }
-            return;
-        }
 
         if (request.command === 'audit') {
             const workspaceFolders = vscode.workspace.workspaceFolders;

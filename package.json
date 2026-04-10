@@ -20,20 +20,8 @@
         "description": "Your project's architect and scrum master.",
         "commands": [
           {
-            "name": "summary",
-            "description": "Generate a Daily Standup note from your recent Git commits."
-          },
-          {
             "name": "draw",
             "description": "Visualize the project's architecture with a Mermaid diagram."
-          },
-          {
-            "name": "trace",
-            "description": "Trace where a symbol is defined and referenced across the codebase."
-          },
-          {
-            "name": "path",
-            "description": "Trace a request path from route to handler to DB/external calls."
           },
           {
             "name": "config",
