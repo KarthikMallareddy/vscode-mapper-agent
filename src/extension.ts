@@ -3636,6 +3636,21 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
             return;
         }
 
+        if (message.type === 'openAndExplain' && message.filePath) {
+            try {
+                const fileUri = vscode.Uri.file(String(message.filePath));
+                const doc = await vscode.workspace.openTextDocument(fileUri);
+                const line = Math.max(0, Number(message.line || 1) - 1);
+                const pos = new vscode.Position(line, 0);
+                await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos) });
+                // Programmatically trigger the chat panel with the explain command pre-filled
+                vscode.commands.executeCommand('workbench.action.chat.open', "@mapper /explain");
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`@mapper: Could not open and explain file: ${err?.message || String(err)}`);
+            }
+            return;
+        }
+
         if (message.type === 'fileSymbols' && message.filePath) {
             try {
                 const filePath = String(message.filePath);
@@ -3903,7 +3918,17 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                     </div>
                 </div>
             </div>
-            <style>@keyframes spin { 100% { transform: rotate(360deg); } }</style>
+
+            <div id="node-context-menu" style="display:none; position:absolute; flex-direction:column; background:rgba(15,17,26,0.95); border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:6px; box-shadow:0 8px 24px rgba(0,0,0,0.6); z-index:100; min-width:150px; backdrop-filter:blur(10px);">
+                <button id="ctx-open" style="background:transparent; border:none; color:#e2e8f0; text-align:left; padding:8px 12px; margin:2px 0; border-radius:4px; font-weight:500; cursor:pointer; outline:none; transition:background 0.2s;">📂 Open File</button>
+                <div style="height:1px; background:rgba(255,255,255,0.1); margin:4px 0;"></div>
+                <button id="ctx-explain" style="background:transparent; border:none; color:#c4b5fd; text-align:left; padding:8px 12px; margin:2px 0; border-radius:4px; font-weight:500; cursor:pointer; outline:none; transition:background 0.2s;">🪄 Explain Code</button>
+            </div>
+            
+            <style>
+                @keyframes spin { 100% { transform: rotate(360deg); } }
+                #ctx-open:hover, #ctx-explain:hover { background: rgba(255,255,255,0.1) !important; }
+            </style>
 
             <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
             <script nonce="${nonce}" type="module">
@@ -4225,7 +4250,13 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                     e.preventDefault();
                                     e.stopPropagation();
                                     if (openTarget && openTarget.filePath) {
-                                        vscode.postMessage({ type: 'open', filePath: openTarget.filePath, line: openTarget.line || 1 });
+                                        if (ctxMenu) {
+                                            ctxMenu.style.display = 'flex';
+                                            ctxMenu.style.left = e.pageX + 'px';
+                                            ctxMenu.style.top = e.pageY + 'px';
+                                            ctxMenu.dataset.filePath = openTarget.filePath;
+                                            ctxMenu.dataset.line = openTarget.line || 1;
+                                        }
                                         return;
                                     }
                                     if (target) {
@@ -4308,6 +4339,24 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                 newGoalInput.value = '';
                                 newGoalInput.placeholder = 'Adding...';
                             }
+                        });
+
+                        const ctxMenu = document.getElementById('node-context-menu');
+
+                        document.addEventListener('click', (e) => {
+                            if (ctxMenu && e.target.id !== 'ctx-open' && e.target.id !== 'ctx-explain') {
+                                ctxMenu.style.display = 'none';
+                            }
+                        });
+
+                        document.getElementById('ctx-open').addEventListener('click', () => {
+                            vscode.postMessage({ type: 'open', filePath: ctxMenu.dataset.filePath, line: ctxMenu.dataset.line });
+                            ctxMenu.style.display = 'none';
+                        });
+
+                        document.getElementById('ctx-explain').addEventListener('click', () => {
+                            vscode.postMessage({ type: 'openAndExplain', filePath: ctxMenu.dataset.filePath, line: ctxMenu.dataset.line });
+                            ctxMenu.style.display = 'none';
                         });
 
                         populateFileSelect();
