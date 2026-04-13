@@ -3919,15 +3919,19 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                 </div>
             </div>
 
-            <div id="node-context-menu" style="display:none; position:absolute; flex-direction:column; background:rgba(15,17,26,0.95); border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:6px; box-shadow:0 8px 24px rgba(0,0,0,0.6); z-index:100; min-width:150px; backdrop-filter:blur(10px);">
-                <button id="ctx-open" style="background:transparent; border:none; color:#e2e8f0; text-align:left; padding:8px 12px; margin:2px 0; border-radius:4px; font-weight:500; cursor:pointer; outline:none; transition:background 0.2s;">📂 Open File</button>
-                <div style="height:1px; background:rgba(255,255,255,0.1); margin:4px 0;"></div>
-                <button id="ctx-explain" style="background:transparent; border:none; color:#c4b5fd; text-align:left; padding:8px 12px; margin:2px 0; border-radius:4px; font-weight:500; cursor:pointer; outline:none; transition:background 0.2s;">🪄 Explain Code</button>
+            <div id="node-context-menu" style="display:none; position:absolute; flex-direction:column; background:var(--vscode-menu-background, #1e1e1e); border:1px solid var(--vscode-menu-border, rgba(255,255,255,0.1)); border-radius:6px; padding:4px; box-shadow:0 4px 16px rgba(0,0,0,0.5); z-index:100; min-width:160px; font-family:var(--vscode-font-family); font-size:var(--vscode-font-size);">
+                <button id="ctx-open" style="background:transparent; border:none; color:var(--vscode-menu-foreground, #cccccc); text-align:left; padding:6px 10px; margin:0; border-radius:4px; font-weight:normal; cursor:pointer; outline:none; transition:none; width: 100%; display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size:14px; opacity:0.8;">📂</span> Open File
+                </button>
+                <div style="height:1px; background:var(--vscode-menu-separatorBackground, rgba(255,255,255,0.1)); margin:4px 0;"></div>
+                <button id="ctx-explain" style="background:transparent; border:none; color:var(--vscode-menu-foreground, #cccccc); text-align:left; padding:6px 10px; margin:0; border-radius:4px; font-weight:normal; cursor:pointer; outline:none; transition:none; width: 100%; display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size:14px; opacity:0.8;">🪄</span> Explain Code
+                </button>
             </div>
             
             <style>
                 @keyframes spin { 100% { transform: rotate(360deg); } }
-                #ctx-open:hover, #ctx-explain:hover { background: rgba(255,255,255,0.1) !important; }
+                #ctx-open:hover, #ctx-explain:hover { background: var(--vscode-menu-selectionBackground, #04395e) !important; color: var(--vscode-menu-selectionForeground, #ffffff) !important; }
             </style>
 
             <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
