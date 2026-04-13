@@ -3365,6 +3365,16 @@ function buildSectionView(
         }
     }
 
+    // Dynamic premium dark-mode theme based on kind
+    const themeByKind: Record<string, { fill: string, stroke: string, text: string }> = {
+        'frontend': { fill: '#10b98126', stroke: '#10b9814d', text: '#6ee7b7' },
+        'backend': { fill: '#8b5cf626', stroke: '#8b5cf64d', text: '#c4b5fd' },
+        'datastore': { fill: '#0ea5e926', stroke: '#0ea5e94d', text: '#7dd3fc' },
+        'service': { fill: '#eab30826', stroke: '#eab3084d', text: '#fdf08a' },
+        'external': { fill: '#e11d4826', stroke: '#e11d484d', text: '#fda4af' }
+    };
+    const theme = themeByKind[kind] || { fill: '#ffffff0d', stroke: '#ffffff26', text: '#e2e8f0' };
+
     // Summary header node.
     const routeTotal = details.reduce((acc, d) => acc + (d.filePath ? (routeCountByFile.get(d.filePath) || 0) : 0), 0);
     const funcTotal  = details.reduce((acc, d) => acc + (d.filePath ? (symCountByFile.get(d.filePath)?.funcs || 0) : 0), 0);
@@ -3373,7 +3383,7 @@ function buildSectionView(
         : `${title} - ${details.length} files - ${funcTotal} fns`;
     const safeHeader = headerLabel.replace(/"/g, "'").replace(/\r?\n/g, ' ');
     lines.push(`  ${rootId}["${safeHeader}"]`);
-    lines.push(`  style ${rootId} fill:#e0e7ff,stroke:#6366f1,stroke-width:2px,color:#1e1b4b,font-weight:bold`);
+    lines.push(`  style ${rootId} fill:${theme.fill},stroke:${theme.stroke},stroke-width:2px,color:${theme.text},font-weight:bold`);
 
     if (details.length === 0) {
         lines.push(`  ${rootId} --> Empty[No ${escapeMermaidLabel(title)} source files detected]`);
@@ -3427,6 +3437,7 @@ function buildSectionView(
             // Safe for Mermaid quoted strings: escape only double-quotes.
             const safeLabel = rawLabel.replace(/"/g, "'").replace(/\r?\n/g, ' ');
             lines.push(`    ${id}["${safeLabel}"]`);
+            lines.push(`    style ${id} fill:${theme.fill},stroke:${theme.stroke},stroke-width:1px,color:${theme.text}`);
 
             if (openMap && item.filePath) {
                 openMap[id] = { filePath: item.filePath, line: 1 };
