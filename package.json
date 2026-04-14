@@ -3,6 +3,7 @@
   "displayName": "Mapper Agent",
   "description": "An AI-powered architect and scrum master for your projects.",
   "version": "1.0.0",
+  "publisher": "karthik",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -21,23 +22,23 @@
         "commands": [
           {
             "name": "draw",
-            "description": "Visualize the project's architecture with a Mermaid diagram."
+            "description": "Deeply scans the active workspace and renders an interactive, live Mermaid.js architecture flow diagram inside a Webview."
           },
           {
             "name": "config",
-            "description": "Show configuration flow: env keys to settings to clients."
+            "description": "Visually traces the routing paths, injected API keys, and environment variables configured across the project."
           },
           {
             "name": "explain",
-            "description": "Explain the role of the currently open file in the architecture."
+            "description": "Analyzes the currently active editor file and provides a high-level summary of its role within the broader technical architecture."
           },
           {
             "name": "export",
-            "description": "Export the project architecture as an ARCHITECTURE.md file."
+            "description": "Generates a comprehensive ARCHITECTURE.md snapshot containing the total workspace dependency map and entity tree."
           },
           {
             "name": "scrumtracker",
-            "description": "Open the AI-mapped Git Scrum Tracker."
+            "description": "Opens an intelligent AI-driven Kanban board that automatically maps open goals to local git commits using Gemini semantics."
           }
         ]
       }
