@@ -10,6 +10,7 @@ import { execSync } from 'child_process';
 // ─────────────────────────────────────────────────────────────────
 // Scrum Goals Backend
 // ─────────────────────────────────────────────────────────────────
+let _globalContext: vscode.ExtensionContext | undefined;
 export interface ScrumGoal {
     id: string;
     title: string;
@@ -17,6 +18,10 @@ export interface ScrumGoal {
     completedBy?: string;
     commitHash?: string;
     createdAt: string;
+    assignee?: string;
+    priority?: number;
+    tags?: string[];
+    type?: string;
 }
 
 export function getScrumGoals(rootPath: string): ScrumGoal[] {
@@ -37,29 +42,69 @@ export async function detectScrumCompletions(rootPath: string) {
     if (openGoals.length === 0) return;
 
     let rawLog = '';
-    try { rawLog = execSync('git log -n 30 --pretty=format:"%H|%an|%s" --date=short', { cwd: rootPath, encoding: 'utf8' }).trim(); } catch { return; }
+    try { rawLog = execSync('git log -n 30 --format="%H@@@%an@@@%s" --date=short', { cwd: rootPath, encoding: 'utf8' }).trim(); } catch { return; }
     if (!rawLog) return;
 
     const commits = rawLog.split('\n').filter(Boolean).map(line => {
-        const parts = line.split('|');
-        return { hash: parts[0], author: parts[1], msg: parts.slice(2).join('|') };
+        const parts = line.split('@@@');
+        return { hash: parts[0], author: parts[1], msg: parts.slice(2).join('@@@') };
     });
 
     try {
-        const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
-        if (!models || models.length === 0) return;
-        const model = models[0];
+        let models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
+        if (!models || models.length === 0) {
+            models = await vscode.lm.selectChatModels({}); // Fallback to any available installed AI model
+        }
+        let model = (models && models.length > 0) ? models[0] : undefined;
 
-        const prompt = `You are a Scrum Master AI. Evaluate these Recent Commits against the Open Goals to see if any commits completely fulfill a goal.
+    const prompt = `You are a Scrum AI that maps recent Git Commits to Open Project Goals.
+- If a commit seems reasonably likely to resolve a goal based on the text, map it!
+- Be extremely lenient with typos, misspellings, or brief descriptions. Ex: "CHne the Readme" completely matches a commit like "change in readme".
+- If an assignee exists on the goal, the commit author MUST match or closely resemble it (case-insensitive).
 Open Goals: ${JSON.stringify(openGoals)}
 Recent Commits: ${JSON.stringify(commits)}
 
 Return ONLY a valid JSON array mapping the goal ID to the commit Hash and Author that completed it. Example: [{"goalId":"123","commitHash":"abc1234","author":"John Doe"}]
-If no commit strongly matches a goal, return []. Do not add any markdown formatting or text outside JSON.`;
+If absolutely zero commits match, return []. Do not add any markdown formatting or text outside JSON.`;
 
-        const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, new vscode.CancellationTokenSource().token);
         let responseText = '';
-        for await (const chunk of response.text) responseText += chunk;
+        if (model) {
+            try {
+                const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, new vscode.CancellationTokenSource().token);
+                for await (const chunk of response.text) responseText += chunk;
+            } catch (e) {
+                console.error("Local model request failed", e);
+            }
+        }
+
+        if (!responseText && _globalContext) {
+            const apiKey = await getApiKey(_globalContext);
+            if (apiKey) {
+                try {
+                    // @ts-ignore
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ role: "user", parts: [{ text: prompt }] }],
+                            generationConfig: { temperature: 0.1 }
+                        })
+                    });
+                    const data: any = await res.json();
+                    if (data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+                        responseText = data.candidates[0].content.parts[0].text;
+                    }
+                } catch (e) {
+                    console.error('Gemini fallback failed', e);
+                }
+            }
+        }
+
+        if (!responseText) {
+            console.warn("No AI models available or API request failed.");
+            return;
+        }
+
         const jsonStr = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
         const matches = JSON.parse(jsonStr) as Array<{ goalId: string; commitHash: string; author: string }>;
 
@@ -80,6 +125,7 @@ If no commit strongly matches a goal, return []. Do not add any markdown formatt
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    _globalContext = context;
     console.log('@mapper is now active!');
 
     // Initialize scan cache file watcher.
@@ -3732,7 +3778,16 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
             try {
                 await detectScrumCompletions(rootPath);
                 const goals = getScrumGoals(rootPath);
-                panel.webview.postMessage({ type: 'scrumResult', goals });
+                // Extract unique contributors from git log for assignee dropdown
+                let contributors: string[] = [];
+                try {
+                    const rawLog = execSync('git log -n 200 --pretty=format:"%aN"', { cwd: rootPath, encoding: 'utf8' }).trim();
+                    if (rawLog) {
+                        const names = new Set(rawLog.split('\n').map((n: string) => n.trim()).filter(Boolean));
+                        contributors = Array.from(names).sort();
+                    }
+                } catch { /* no git */ }
+                panel.webview.postMessage({ type: 'scrumResult', goals, contributors });
             } catch(e: any) {
                 panel.webview.postMessage({ type: 'error', message: `@mapper: Scrum check failed: ${e?.message || String(e)}` });
             }
@@ -3744,17 +3799,64 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                 const title = String(message.title || '').trim();
                 if (title) {
                     const goals = getScrumGoals(rootPath);
+                    const assignee = message.assignee ? String(message.assignee).trim() : undefined;
+                    const tags = Array.isArray(message.tags) ? message.tags.filter((t: any) => typeof t === 'string') : undefined;
+                    const ticketType = message.ticketType ? String(message.ticketType).trim() : undefined;
                     goals.push({ 
                         id: Math.random().toString(36).substring(2, 9), 
                         title, 
                         completed: false, 
-                        createdAt: new Date().toISOString() 
+                        createdAt: new Date().toISOString(),
+                        assignee: assignee || undefined,
+                        tags: (tags && tags.length > 0) ? tags : undefined,
+                        type: ticketType || undefined,
+                        priority: goals.filter(g => !g.completed).length
                     });
                     saveScrumGoals(rootPath, goals);
                     panel.webview.postMessage({ type: 'scrumResult', goals });
                 }
             } catch(e: any) {
                 panel.webview.postMessage({ type: 'error', message: `@mapper: Add goal failed: ${e?.message || String(e)}` });
+            }
+            return;
+        }
+
+        if (message.type === 'showDiff' && message.commitHash) {
+            try {
+                const hash = String(message.commitHash).trim();
+                // Try the built-in Git extension's diff command
+                try {
+                    await vscode.commands.executeCommand('git.viewChanges', hash);
+                } catch {
+                    // Fallback: open an integrated terminal with git show
+                    const terminal = vscode.window.createTerminal('Git Diff');
+                    terminal.show();
+                    terminal.sendText(`git show ${hash}`);
+                }
+            } catch(e: any) {
+                vscode.window.showErrorMessage(`@mapper: Could not show diff: ${e?.message || String(e)}`);
+            }
+            return;
+        }
+
+        if (message.type === 'reorderGoals' && Array.isArray(message.orderedIds)) {
+            try {
+                const goals = getScrumGoals(rootPath);
+                const idOrder: string[] = message.orderedIds;
+                // Update priority based on position in the ordered array
+                for (let i = 0; i < idOrder.length; i++) {
+                    const g = goals.find(g => g.id === idOrder[i]);
+                    if (g) g.priority = i;
+                }
+                // Sort non-completed goals by priority
+                goals.sort((a, b) => {
+                    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+                    return (a.priority ?? 999) - (b.priority ?? 999);
+                });
+                saveScrumGoals(rootPath, goals);
+                panel.webview.postMessage({ type: 'scrumResult', goals });
+            } catch(e: any) {
+                panel.webview.postMessage({ type: 'error', message: `@mapper: Reorder failed: ${e?.message || String(e)}` });
             }
             return;
         }
@@ -3861,16 +3963,64 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                 
                 /* Scrum UI Styles */
                 .scrum-board { display: flex; gap: 20px; padding: 20px; min-height: calc(100vh - 100px); align-items: flex-start; justify-content: center; }
-                .scrum-col { width: 400px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 18px; min-height: 500px; display: flex; flex-direction: column; gap: 14px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); }
+                .scrum-col { width: 420px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 18px; min-height: 500px; display: flex; flex-direction: column; gap: 14px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); }
                 .scrum-col-title { font-weight: 700; font-size: 15px; color: var(--fg); margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
-                .scrum-card { background: rgba(15, 17, 26, 0.9); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: transform 0.2s; }
+                .scrum-card { background: rgba(15, 17, 26, 0.9); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: transform 0.2s, border-color 0.2s, opacity 0.2s; cursor: default; }
                 .scrum-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.2); }
                 .scrum-card.completed { border-color: rgba(16, 185, 129, 0.5); background: linear-gradient(180deg, rgba(16,185,129,0.05) 0%, rgba(15,17,26,0.9) 100%); }
-                .scrum-card-title { font-weight: 600; font-size: 14px; margin-bottom: 12px; line-height: 1.4; }
+                .scrum-card-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; line-height: 1.4; }
                 .scrum-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-                .scrum-input { background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff; padding: 10px 12px; border-radius: 6px; width: calc(100% - 26px); outline: none; margin-bottom: 4px; font-size: 13px; font-family: inherit; }
+                .scrum-input { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--input-fg); padding: 10px 12px; border-radius: 6px; width: calc(100% - 26px); outline: none; margin-bottom: 4px; font-size: 13px; font-family: inherit; }
                 .scrum-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
                 .badge { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: #6ee7b7; padding: 3px 8px; border-radius: 5px; font-weight: 600; font-size: 10px; }
+                
+                /* Drag & Drop */
+                .scrum-card[draggable="true"] { cursor: grab; }
+                .scrum-card[draggable="true"]:active { cursor: grabbing; }
+                .scrum-card.dragging { opacity: 0.4; border: 1px dashed rgba(99, 102, 241, 0.5); }
+                .scrum-card.drag-over { border-top: 2px solid var(--accent); margin-top: -2px; }
+                
+                /* Clickable commit hash */
+                .hash-link { background: none; border: none; color: var(--accent); font-family: monospace; font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+                .hash-link:hover { color: #818cf8; text-decoration-style: solid; }
+                
+                /* Assignee avatar */
+                .assignee-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0; }
+                
+                /* Tag chips on cards */
+                .scrum-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+                .scrum-tag { padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; border: 1px solid; }
+                .tag-frontend { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.3); }
+                .tag-api      { background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border-color: rgba(139, 92, 246, 0.3); }
+                .tag-bug      { background: rgba(225, 29, 72, 0.15); color: #fda4af; border-color: rgba(225, 29, 72, 0.3); }
+                .tag-hotfix   { background: rgba(234, 179, 8, 0.15); color: #fdf08a; border-color: rgba(234, 179, 8, 0.3); }
+                .tag-data     { background: rgba(14, 165, 233, 0.15); color: #7dd3fc; border-color: rgba(14, 165, 233, 0.3); }
+                .tag-devops   { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.3); }
+                
+                /* Tag picker in input area */
+                .tag-picker { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+                .tag-picker-chip { padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; cursor: pointer; border: 1px solid; opacity: 0.5; transition: opacity 0.15s; }
+                .tag-picker-chip.selected { opacity: 1; box-shadow: 0 0 6px rgba(255,255,255,0.1); }
+                .tag-picker-chip:hover { opacity: 0.85; }
+                
+                /* Ticket type badge */
+                .type-badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; border: 1px solid; }
+                .type-story { background: rgba(59, 130, 246, 0.15); color: #93c5fd; border-color: rgba(59, 130, 246, 0.3); }
+                .type-bug { background: rgba(225, 29, 72, 0.15); color: #fda4af; border-color: rgba(225, 29, 72, 0.3); }
+                .type-task { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.3); }
+                .type-improvement { background: rgba(234, 179, 8, 0.15); color: #fde68a; border-color: rgba(234, 179, 8, 0.3); }
+                
+                /* Input row layout */
+                .scrum-input-row { display: flex; gap: 8px; align-items: center; }
+                .scrum-input-row .scrum-input { flex: 1; margin-bottom: 0; }
+                .scrum-input-row select { background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--input-fg); padding: 8px 10px; padding-right: 28px; border-radius: 6px; font-size: 12px; outline: none; min-width: 100px;
+                    appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20fill%3D%22%2394a3b8%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M8%2011L3%206h10l-5%205z%22%2F%3E%3C%2Fsvg%3E"); background-repeat: no-repeat; background-position: right 8px center; }
+                .scrum-input-row select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2); }
+                
+                /* Assignee filter */
+                .scrum-filter { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+                .scrum-filter label { font-size: 11px; color: var(--muted); font-weight: 600; }
+                .scrum-filter select { background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--input-fg); padding: 5px 8px; padding-right: 24px; border-radius: 5px; font-size: 11px; outline: none; appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20fill%3D%22%2394a3b8%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M8%2011L3%206h10l-5%205z%22%2F%3E%3C%2Fsvg%3E"); background-repeat: no-repeat; background-position: right 4px center; }
             </style>
         </head>
         <body>
@@ -3905,15 +4055,30 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                     <span>Preparing Canvas...</span>
                 </div>
             </div>
-            <div id="scrum-container" style="display:none; width: 100%; height: 100%; padding-top: 70px; overflow-y: auto; box-sizing: border-box; background: var(--bg);">
+            <div id="scrum-container" style="display:none; width: 100%; height: 100%; padding-top: 130px; overflow-y: auto; box-sizing: border-box; background: var(--bg);">
                 <div class="scrum-board">
                     <div class="scrum-col" id="col-todo">
-                        <div class="scrum-col-title"><span>📌 To Do / Active</span> <span id="todo-count" style="color:#64748b; font-size:12px;">0</span></div>
-                        <input type="text" id="newGoalInput" class="scrum-input" placeholder="Type a new goal and press Enter...">
+                        <div class="scrum-col-title">
+                            <span>📌 To Do / Active</span>
+                            <div style="display:flex; align-items:center; gap:12px;">
+                                <button id="syncGitBtn" style="background:var(--btn-bg); border-color:var(--border); padding:3px 8px; font-size:11px; display:flex; align-items:center; gap:4px; font-weight:600; cursor:pointer;" title="Scan Git history for completions">🔄 Sync</button>
+                                <span id="todo-count" style="color:#64748b; font-size:12px;">0</span>
+                            </div>
+                        </div>
+                        <div class="scrum-filter">
+                            <label>Filter:</label>
+                            <select id="assigneeFilter"><option value="">All</option></select>
+                        </div>
+                        <input type="text" id="newGoalInput" class="scrum-input" placeholder="Type a new goal and press Enter..." style="width:100%; box-sizing:border-box; margin-bottom:8px;">
+                        <div class="scrum-input-row" style="justify-content:flex-start;">
+                            <select id="typeSelect"><option value="">Type...</option><option value="Story">📘 Story</option><option value="Bug">🐛 Bug</option><option value="Task">✅ Task</option><option value="Improvement">🚀 Improvement</option></select>
+                            <select id="assigneeSelect"><option value="">Assign to...</option></select>
+                            <button id="addGoalBtn" style="margin-left: auto; background: var(--accent); border-color: #818cf8; color: #fff;">+ Add</button>
+                        </div>
                         <div id="scrum-todo-list" style="display:flex; flex-direction:column; gap:12px;"></div>
                     </div>
                     <div class="scrum-col" id="col-done">
-                        <div class="scrum-col-title"><span>✅ Ready for Review</span> <span id="done-count" style="color:#64748b; font-size:12px;">0</span></div>
+                        <div class="scrum-col-title"><span>✅ Completed</span> <span id="done-count" style="color:#64748b; font-size:12px;">0</span></div>
                         <div id="scrum-done-list" style="display:flex; flex-direction:column; gap:12px;"></div>
                     </div>
                 </div>
@@ -4337,13 +4502,48 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                             vscode.postMessage({ type: 'scrumView' });
                         });
 
-                        newGoalInput.addEventListener('keypress', (e) => {
-                            if (e.key === 'Enter' && newGoalInput.value.trim()) {
-                                vscode.postMessage({ type: 'addGoal', title: newGoalInput.value.trim() });
+                        const assigneeSelect = document.getElementById('assigneeSelect');
+                        const assigneeFilter = document.getElementById('assigneeFilter');
+                        const typeSelect = document.getElementById('typeSelect');
+                        const addGoalBtn = document.getElementById('addGoalBtn');
+
+                        function submitNewGoal() {
+                            if (newGoalInput.value.trim()) {
+                                const assignee = assigneeSelect ? assigneeSelect.value : '';
+                                const ticketType = typeSelect ? typeSelect.value : '';
+                                vscode.postMessage({ type: 'addGoal', title: newGoalInput.value.trim(), assignee: assignee || undefined, ticketType: ticketType || undefined });
                                 newGoalInput.value = '';
                                 newGoalInput.placeholder = 'Adding...';
+                                if (assigneeSelect) assigneeSelect.value = '';
+                                if (typeSelect) typeSelect.value = '';
+                            }
+                        }
+
+                        newGoalInput.addEventListener('keypress', (e) => {
+                            if (e.key === 'Enter') {
+                                submitNewGoal();
                             }
                         });
+
+                        if (addGoalBtn) {
+                            addGoalBtn.addEventListener('click', submitNewGoal);
+                        }
+
+                        const syncGitBtn = document.getElementById('syncGitBtn');
+                        if (syncGitBtn) {
+                            syncGitBtn.addEventListener('click', () => {
+                                syncGitBtn.textContent = '⏳ ...';
+                                hintEl.textContent = 'Scanning git and fetching AI mappings...';
+                                vscode.postMessage({ type: 'scrumView' });
+                            });
+                        }
+
+                        // Assignee filter change — re-render with filtering
+                        if (assigneeFilter) {
+                            assigneeFilter.addEventListener('change', () => {
+                                vscode.postMessage({ type: 'scrumView' });
+                            });
+                        }
 
                         const ctxMenu = document.getElementById('node-context-menu');
 
@@ -4407,14 +4607,75 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                 if (listTodo) listTodo.innerHTML = ''; 
                                 if (listDone) listDone.innerHTML = '';
                                 let td = 0, dn = 0;
-                                
-                                (msg.goals || []).forEach(g => {
-                                    const d = new Date(g.createdAt).toLocaleDateString();
-                                    const meta = g.completed ? 
-                                        '<span class="badge">Autocompleted By ' + (g.completedBy || 'Unknown') + '</span> <span style="font-family:monospace;">' + (g.commitHash ? g.commitHash.slice(0,7) : '') + '</span>' : 
-                                        '<span>' + d + '</span>';
+
+                                // Populate contributor dropdowns
+                                var contribs = msg.contributors || [];
+                                if (assigneeSelect && contribs.length) {
+                                    assigneeSelect.innerHTML = '<option value="">Assign to...</option>';
+                                    contribs.forEach(function(c) { assigneeSelect.innerHTML += '<option value="' + c + '">' + c + '</option>'; });
+                                }
+                                if (assigneeFilter && contribs.length) {
+                                    var curFilter = assigneeFilter.value || '';
+                                    assigneeFilter.innerHTML = '<option value="">All</option>';
+                                    contribs.forEach(function(c) { assigneeFilter.innerHTML += '<option value="' + c + '">' + c + '</option>'; });
+                                    assigneeFilter.value = curFilter;
+                                }
+
+                                var activeFilter = assigneeFilter ? assigneeFilter.value : '';
+
+                                // Assignee color palette
+                                var avatarColors = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#14b8a6'];
+
+                                (msg.goals || []).forEach(function(g) {
+                                    // Apply assignee filter for active goals
+                                    if (!g.completed && activeFilter && g.assignee !== activeFilter) return;
+
+                                    var d = new Date(g.createdAt).toLocaleDateString();
                                     
-                                    const card = '<div class="scrum-card ' + (g.completed ? 'completed' : '') + '">' +
+                                    // Build tag chips HTML
+                                    var tagsHtml = '';
+                                    if (g.tags && g.tags.length) {
+                                        tagsHtml = '<div class="scrum-tags">';
+                                        g.tags.forEach(function(t) {
+                                            var cls = 'tag-' + t.toLowerCase().replace(/[^a-z]/g, '');
+                                            tagsHtml += '<span class="scrum-tag ' + cls + '">' + t + '</span>';
+                                        });
+                                        tagsHtml += '</div>';
+                                    }
+
+                                    // Build type badge
+                                    var typeHtml = '';
+                                    if (g.type) {
+                                        var typeIcons = { 'Story': '\ud83d\udcd8', 'Bug': '\ud83d\udc1b', 'Task': '\u2705', 'Improvement': '\ud83d\ude80' };
+                                        var typeIcon = typeIcons[g.type] || '';
+                                        var typeCls = 'type-' + g.type.toLowerCase().replace(/[^a-z]/g, '');
+                                        typeHtml = '<span class="type-badge ' + typeCls + '">' + typeIcon + ' ' + g.type + '</span>';
+                                    }
+
+                                    // Build assignee badge
+                                    var assigneeHtml = '';
+                                    if (g.assignee) {
+                                        var initial = g.assignee.charAt(0).toUpperCase();
+                                        var colorIdx = 0;
+                                        for (var ci = 0; ci < g.assignee.length; ci++) colorIdx += g.assignee.charCodeAt(ci);
+                                        var bgColor = avatarColors[colorIdx % avatarColors.length];
+                                        assigneeHtml = '<span class="assignee-badge" style="background:' + bgColor + ';" title="' + g.assignee + '">' + initial + '</span> <span style="font-size:11px; color: var(--muted);">' + g.assignee + '</span>';
+                                    }
+
+                                    // Build meta line
+                                    var meta = '';
+                                    if (g.completed) {
+                                        var hashBtn = g.commitHash ? '<button class="hash-link" data-hash="' + g.commitHash + '">' + g.commitHash.slice(0,7) + '</button>' : '';
+                                        meta = '<span class="badge">Completed by ' + (g.completedBy || 'Unknown') + '</span> ' + hashBtn;
+                                    } else {
+                                        meta = '<span>' + d + '</span>';
+                                    }
+                                    if (typeHtml) meta += ' ' + typeHtml;
+                                    if (assigneeHtml) meta += ' ' + assigneeHtml;
+
+                                    var draggable = g.completed ? '' : ' draggable="true"';
+                                    var card = '<div class="scrum-card ' + (g.completed ? 'completed' : '') + '"' + draggable + ' data-id="' + g.id + '">' +
+                                        tagsHtml +
                                         '<div class="scrum-card-title">' + g.title + '</div>' +
                                         '<div class="scrum-meta">' + meta + '</div>' +
                                     '</div>';
@@ -4425,6 +4686,52 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                 if (cTodo) cTodo.textContent = td;
                                 if (cDone) cDone.textContent = dn;
                                 if (newGoalInput) newGoalInput.placeholder = 'Type a new goal and press Enter...';
+                                hintEl.textContent = td + ' active · ' + dn + ' completed';
+
+                                // Wire clickable commit hashes
+                                document.querySelectorAll('.hash-link').forEach(function(btn) {
+                                    btn.addEventListener('click', function(e) {
+                                        e.stopPropagation();
+                                        vscode.postMessage({ type: 'showDiff', commitHash: btn.dataset.hash });
+                                    });
+                                });
+
+                                // Wire drag and drop on todo cards
+                                var dragSrcEl = null;
+                                if (listTodo) {
+                                    listTodo.querySelectorAll('.scrum-card[draggable]').forEach(function(card) {
+                                        card.addEventListener('dragstart', function(e) {
+                                            dragSrcEl = card;
+                                            card.classList.add('dragging');
+                                            e.dataTransfer.effectAllowed = 'move';
+                                            e.dataTransfer.setData('text/plain', card.dataset.id);
+                                        });
+                                        card.addEventListener('dragend', function() {
+                                            card.classList.remove('dragging');
+                                            listTodo.querySelectorAll('.scrum-card').forEach(function(c) { c.classList.remove('drag-over'); });
+                                        });
+                                        card.addEventListener('dragover', function(e) {
+                                            e.preventDefault();
+                                            e.dataTransfer.dropEffect = 'move';
+                                            if (card !== dragSrcEl) card.classList.add('drag-over');
+                                        });
+                                        card.addEventListener('dragleave', function() {
+                                            card.classList.remove('drag-over');
+                                        });
+                                        card.addEventListener('drop', function(e) {
+                                            e.preventDefault();
+                                            card.classList.remove('drag-over');
+                                            if (dragSrcEl && dragSrcEl !== card) {
+                                                // Move dragged card before this card
+                                                listTodo.insertBefore(dragSrcEl, card);
+                                                // Collect new order and persist
+                                                var orderedIds = [];
+                                                listTodo.querySelectorAll('.scrum-card').forEach(function(c) { orderedIds.push(c.dataset.id); });
+                                                vscode.postMessage({ type: 'reorderGoals', orderedIds: orderedIds });
+                                            }
+                                        });
+                                    });
+                                }
                             }
 
                             if (msg.type === 'error') {
