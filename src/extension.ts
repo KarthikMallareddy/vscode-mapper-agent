@@ -3826,6 +3826,17 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
             return;
         }
 
+        if (message.type === 'clearAllGoals') {
+            try {
+                saveScrumGoals(rootPath, []);
+                panel.webview.postMessage({ type: 'scrumResult', goals: [], contributors: [] });
+                vscode.window.showInformationMessage('Mapper: Scrum board cleared.');
+            } catch(e: any) {
+                panel.webview.postMessage({ type: 'error', message: `@mapper: Clear failed: ${e?.message || String(e)}` });
+            }
+            return;
+        }
+
         if (message.type === 'showDiff' && message.commitHash) {
             try {
                 const hash = String(message.commitHash).trim();
@@ -4067,6 +4078,7 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                             <span>📌 To Do / Active</span>
                             <div style="display:flex; align-items:center; gap:12px;">
                                 <button id="syncGitBtn" style="background:var(--btn-bg); border-color:var(--border); padding:3px 8px; font-size:11px; display:flex; align-items:center; gap:4px; font-weight:600; cursor:pointer;" title="Scan Git history for completions">🔄 Sync</button>
+                                <button id="clearAllBtn" style="background:transparent; border-color:#ef4444; color:#ef4444; padding:3px 8px; font-size:11px; display:flex; align-items:center; gap:4px; font-weight:600; cursor:pointer;" title="Clear all goals and reset the Scrum board">🗑 Clear All</button>
                                 <span id="todo-count" style="color:#64748b; font-size:12px;">0</span>
                             </div>
                         </div>
@@ -4540,6 +4552,15 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                 syncGitBtn.textContent = '⏳ ...';
                                 hintEl.textContent = 'Scanning git and fetching AI mappings...';
                                 vscode.postMessage({ type: 'scrumView' });
+                            });
+                        }
+
+                        const clearAllBtn = document.getElementById('clearAllBtn');
+                        if (clearAllBtn) {
+                            clearAllBtn.addEventListener('click', () => {
+                                if (confirm('Are you sure you want to clear ALL goals from the Scrum board? This cannot be undone.')) {
+                                    vscode.postMessage({ type: 'clearAllGoals' });
+                                }
                             });
                         }
 
