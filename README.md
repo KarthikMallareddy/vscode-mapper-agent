@@ -1,6 +1,8 @@
 # Mapper
 *The AI-powered architect and scrum master for your projects.*
 
+![Mapper Agent Showcase](images/showcase.png)
+
 Mapper is a Visual Studio Code extension designed to bring order to code chaos. By deeply analyzing your codebase via AST parsing and module resolution, and integrating directly with Google's Gemini 1.5 Pro AI, Mapper provides live, zoomable architecture visualizations and zero-friction project management using your local Git history.
 
 ## Features

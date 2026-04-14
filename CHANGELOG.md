@@ -2,6 +2,13 @@
 
 All notable changes to the `@mapper` extension will be documented in this file.
 
+## [1.1.1] - 2026-04-14
+
+### Documentation
+- Added a high-fidelity, professional showcase image to the README to demonstrate the Architecture Mapping and Scrum Tracker UI without exposing private project data.
+
+---
+
 ## [1.1.0] - 2026-04-14
 
 ### Features
