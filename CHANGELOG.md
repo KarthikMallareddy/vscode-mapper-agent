@@ -1,62 +1,26 @@
 # Change Log
 
-All notable changes to the `@mapper` extension will be documented in this file.
+All notable changes to the `Mapper Agent` extension will be documented in this file.
 
-## [1.1.4] - 2026-04-14
+## [1.0.0] - 2026-04-14 (Initial Production Release)
 
-### Publication Fixes
-- **Marketplace Branding Update**: Finalized the unique display name to "Mapper Agent : Architect and Scrum" and internal ID to "atMapper" to definitively clear naming conflicts on the VS Code Marketplace.
+### ✨ Core Features
+- **Intelligent Architecture Mapping**: Use `@mapper /draw` to generate high-level Mermaid.js visualizations of local workspaces based on AST and module resolution.
+- **Scrum Tracker**: An AI-driven Kanban board that automatically maps open goals to local git commits using natural language semantics.
+- **Two-Tier AI Engine**: Optimized for **0-credit usage** via GitHub Copilot (GPT-4o), with a secure fallback to the Google Gemini API.
+- **Explain Module**: Real-time contextual feedback about specific files in your dependency tree.
 
----
+### 🛠 UI & UX
+- **Model Transparency**: Status bar indicators show exactly which AI model (GPT-4o or Gemini) is processing your data.
+- **Rich Interactions**: Clickable commit-diff hashes, assignee filtering, and drag-and-drop task prioritization.
+- **Glassmorphism Design**: High-fidelity dark mode interface following VS Code's design language.
+- **Navigation Safety**: Fully functional Back/Forward navigation stack including support for shifting between the Architecture and Scrum views.
 
-## [1.1.3] - 2026-04-14
+### 🛡 Privacy & Security
+- **Zero SaaS Lock-in**: All caches (`.mapper/`) and Scrum data are stored exclusively in your local workspace.
+- **Secret Storage**: API keys are stored in VS Code's encrypted Secret Storage vault.
 
-### Bug Fixes
-- **Navigation State Fix**: Resolved the root cause of the "Missing Mermaid view: scrum" error. The extension now correctly updates its internal state when the Scrum Tracker is active, preventing navigation stack corruption.
-
----
-
-## [1.1.2] - 2026-04-14
-
-### Bug Fixes
-- **Back button crash**: Fixed "Missing Mermaid view: scrum" error that appeared when pressing Back after navigating from the Scrum Tracker into a symbol or file view.
-- **Remove button**: Individual goal cards in the Scrum Tracker now each display a `✕` remove button in the top-right corner. Clicking it instantly removes just that one ticket without affecting others.
-
----
-
-## [1.1.1] - 2026-04-14
-
-### Documentation
-- Added a high-fidelity, professional showcase image to the README to demonstrate the Architecture Mapping and Scrum Tracker UI without exposing private project data.
-
----
-
-## [1.1.0] - 2026-04-14
-
-### Features
-- **Two-Tier AI Engine**: Mapper now uses a strict, transparent AI selection hierarchy for the Scrum Tracker. If GitHub Copilot with GPT-4o is available, it is used at zero credit cost. If not, it automatically falls back to the Gemini API using the user's free personal key.
-- **Model Transparency**: A VS Code status bar message now appears every time a Scrum sync runs, clearly showing which AI model processed the request (GPT-4o or Gemini).
-- **Credit Safety Guard**: The extension now strictly refuses to fall back to any non-GPT-4o Copilot model (such as Claude or o1) to protect users from unexpected credit consumption.
-
-### Documentation
-- Completely rewrote README.md with a professional structure, architecture diagram, full key component table, and a detailed two-tier AI configuration guide.
-- Added a Privacy Model section clearly documenting what data is and is not sent to external APIs.
-- Documented the free-tier API key setup flow for Gemini with a direct link to Google AI Studio.
-
-### Fixes
-- Corrected publisher ID in `package.json` from `karthik` to `KarthikMallareddy` to match the registered VS Code Marketplace account.
-
----
-
-## [1.0.0] - Initial Release
-
-### ✨ Features
-- **Intelligent Architecture Mapping**: Added the `/draw` command to generate high-level Mermaid.js visualizations of local workspaces based on AST and module resolution.
-- **Scrum Tracker**: Added the `/scrumtracker` command. Introduced an internal Kanban board that automatically parses your local Git log via Gemini 1.5 Pro to map commit resolutions identically to open tickets.
-- **Explain Module**: Added `/explain` for real-time contextual feedback about specific files in your dependency tree.
-- **Exporting**: Introduced `/export` for generating an `ARCHITECTURE.md` snapshot of the current workspace state.
-
-### 🛠 Improvements
-- **Fallback AI Engine**: Added robust internal `fetch` fallback using native API keys so `@mapper` operates perfectly even if the user lacks an installed enterprise Copilot.
-- **Glassmorphism UI**: Native VS Code Webview panels rendered meticulously using modern dark-mode tailored CSS and standardized VS Code color variables.
-- **Cross-Platform Readiness**: Stabilized child processes to ensure complex shell executions (like `git log`) run flawlessly on Windows, macOS, and Linux without delimiter breakages.
+### 🐛 Key Fixes
+- Added per-card **Remove** buttons and a **Clear All** board reset option.
+- Stabilized Windows Git log parsing for robust commit detection.
+- Fixed navigation stack corruption when switching between diagram and board views.
