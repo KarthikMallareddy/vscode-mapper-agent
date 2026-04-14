@@ -69,11 +69,20 @@ Automatically generate an ARCHITECTURE.md file charting your entire project's mo
 | frameworkDetectors.ts | Identifies technologies (React, Express, FastAPI) automatically. |
 
 ## Configuration
-Mapper requires a valid Gemini API Key to function. This key is stored securely in VS Code's native Secret Storage block and is never written to plaintext files. You can reset it at any time using the Mapper: Reset Gemini API Key command.
+
+Mapper requires a **personal Gemini API Key** to power its AI features. Here is everything you need to know before getting started:
+
+- **It is completely free.** Mapper is fully functional on Google's free Gemini API tier. No credit card, no billing plan, no subscription required. Simply create a key at [Google AI Studio](https://aistudio.google.com/app/apikey) and paste it in when prompted.
+- **You are prompted on first use.** The first time you run any Mapper command, a secure input box will appear at the top of VS Code asking for your key. You only ever need to enter it once.
+- **Your key is stored in VS Code's Secret Storage.** This is an OS-level encrypted keychain (the same mechanism VS Code uses for GitHub and Azure credentials). Your key is never written to any file in your workspace, never logged to the output panel, and never sent anywhere other than the official Gemini API endpoint.
+- **To reset or change your key**, open the Command Palette (`Ctrl+Shift+P`) and run `Mapper: Reset Gemini API Key`.
 
 ## Privacy Model
-- **Zero SaaS Lock-in**: All architecture caching (.mapper/) and Scrum goals (scrum.json) are stored natively on your local hard drive.
-- **Safe Telemetry**: Mapper communicates exclusively with official Gemini API endpoints. It sends only module dependency maps for visualizations and commit subjects for task resolutions, keeping your core source code business logic entirely private during these syncs.
+
+- **Zero SaaS Lock-in**: All architecture caching (`.mapper/`) and Scrum goals (`scrum.json`) are stored natively on your local hard drive. No cloud database, no account, no sync server.
+- **Your source code stays private**: Mapper never sends your raw source code to any external service. For visualizations, it sends only module names and import paths. For Scrum resolution, it sends only commit message subjects. Your actual business logic never leaves your machine.
+- **Encrypted key storage**: Your Gemini API Key is stored in VS Code's native OS-level Secret Storage vault — the same encrypted keychain that stores your GitHub tokens and Azure credentials. It is never written to disk in plaintext.
+- **Offline-first**: Architecture scans are cached locally. Once a scan is complete, you can view your diagrams and Scrum board without an internet connection.
 
 ## Development
 ```bash
