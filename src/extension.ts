@@ -3837,6 +3837,21 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
             return;
         }
 
+        if (message.type === 'removeGoal') {
+            try {
+                const goalId = String(message.goalId || '').trim();
+                if (goalId) {
+                    const goals = getScrumGoals(rootPath);
+                    const updated = goals.filter((g: any) => g.id !== goalId);
+                    saveScrumGoals(rootPath, updated);
+                    panel.webview.postMessage({ type: 'scrumResult', goals: updated });
+                }
+            } catch(e: any) {
+                panel.webview.postMessage({ type: 'error', message: `@mapper: Remove goal failed: ${e?.message || String(e)}` });
+            }
+            return;
+        }
+
         if (message.type === 'showDiff' && message.commitHash) {
             try {
                 const hash = String(message.commitHash).trim();
@@ -4700,9 +4715,11 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                     if (assigneeHtml) meta += ' ' + assigneeHtml;
 
                                     var draggable = g.completed ? '' : ' draggable="true"';
-                                    var card = '<div class="scrum-card ' + (g.completed ? 'completed' : '') + '"' + draggable + ' data-id="' + g.id + '">' +
+                                    var removeBtn = '<button class="remove-goal-btn" data-id="' + g.id + '" title="Remove this goal" style="position:absolute; top:8px; right:8px; background:transparent; border:none; color:#64748b; font-size:14px; cursor:pointer; padding:2px 5px; border-radius:4px; line-height:1; opacity:0.6;">✕</button>';
+                                    var card = '<div class="scrum-card ' + (g.completed ? 'completed' : '') + '" ' + draggable + ' data-id="' + g.id + '" style="position:relative;">' +
                                         tagsHtml +
-                                        '<div class="scrum-card-title">' + g.title + '</div>' +
+                                        removeBtn +
+                                        '<div class="scrum-card-title" style="padding-right:20px;">' + g.title + '</div>' +
                                         '<div class="scrum-meta">' + meta + '</div>' +
                                     '</div>';
                                     
@@ -4719,6 +4736,16 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                                     btn.addEventListener('click', function(e) {
                                         e.stopPropagation();
                                         vscode.postMessage({ type: 'showDiff', commitHash: btn.dataset.hash });
+                                    });
+                                });
+
+                                // Wire remove buttons on each card
+                                document.querySelectorAll('.remove-goal-btn').forEach(function(btn) {
+                                    btn.addEventListener('mouseenter', function() { btn.style.opacity = '1'; btn.style.color = '#ef4444'; });
+                                    btn.addEventListener('mouseleave', function() { btn.style.opacity = '0.6'; btn.style.color = '#64748b'; });
+                                    btn.addEventListener('click', function(e) {
+                                        e.stopPropagation();
+                                        vscode.postMessage({ type: 'removeGoal', goalId: btn.dataset.id });
                                     });
                                 });
 
