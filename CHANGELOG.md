@@ -2,6 +2,14 @@
 
 All notable changes to the `@mapper` extension will be documented in this file.
 
+## [1.1.2] - 2026-04-14
+
+### Bug Fixes
+- **Back button crash**: Fixed "Missing Mermaid view: scrum" error that appeared when pressing Back after navigating from the Scrum Tracker into a symbol or file view.
+- **Remove button**: Individual goal cards in the Scrum Tracker now each display a `✕` remove button in the top-right corner. Clicking it instantly removes just that one ticket without affecting others.
+
+---
+
 ## [1.1.1] - 2026-04-14
 
 ### Documentation

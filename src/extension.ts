@@ -4473,6 +4473,22 @@ function openMermaidPreview(preview: MermaidPreview, rootPath: string) {
                         backBtn.addEventListener('click', () => {
                             if (stack.length === 0) return;
                             const prev = stack.pop();
+                            backBtn.disabled = stack.length === 0;
+
+                            // If going back to the scrum panel, restore it directly
+                            if (prev === 'scrum') {
+                                container.style.display = 'none';
+                                scrumContainer.style.display = 'block';
+                                titleEl.textContent = '📋 Scrum Tracker';
+                                breadcrumbEl.textContent = 'Active Goals mapping to Git';
+                                hintEl.textContent = 'Restoring board...';
+                                vscode.postMessage({ type: 'scrumView' });
+                                return;
+                            }
+
+                            // Otherwise hide scrum and render the architecture view
+                            scrumContainer.style.display = 'none';
+                            container.style.display = 'block';
                             renderView(prev, false).catch((err) => showError(err.message || String(err)));
                         });
 
