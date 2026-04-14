@@ -2,7 +2,7 @@
 
 All notable changes to the `Mapper Agent` extension will be documented in this file.
 
-## [1.0.0] - 2026-04-14 (Initial Production Release)
+## [1.1.0] - 2026-04-14 (Initial Production Release)
 
 ### ✨ Core Features
 - **Intelligent Architecture Mapping**: Use `@mapper /draw` to generate high-level Mermaid.js visualizations of local workspaces based on AST and module resolution.
