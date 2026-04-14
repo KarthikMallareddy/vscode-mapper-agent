@@ -10,6 +10,10 @@ Mapper is a Visual Studio Code extension designed to bring order to code chaos. 
 ### Live Architecture Visualization
 Never get lost in a sprawling codebase again. Mapper deeply scans your files, categorizes your technical stack (Frontend, Backend, Database), and visualizes the relationships between your modules in a beautiful, zoomable, interactive Mermaid diagram directly in a Webview panel.
 
+![Architecture Overview Map](images/architecture_map.png)
+
+![Detailed Subsystems View](images/subsystems_view.png)
+
 ### AI Auto-Mapped Scrum Tracker
 Project management natively inside your IDE. Create goals, assign them to team members, and keep track of your ticket types (Bug, Story, Task). 
 **Zero-Friction Completion**: The proprietary AI Sync engine automatically scans your local git commit history. When it detects a commit that resolves a goal, it instantly maps the commit hash and moves the ticket to the "Completed" column.
