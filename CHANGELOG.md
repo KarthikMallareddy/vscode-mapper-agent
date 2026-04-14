@@ -2,6 +2,20 @@
 
 All notable changes to the `@mapper` extension will be documented in this file.
 
+## [1.1.4] - 2026-04-14
+
+### Publication Fixes
+- **Marketplace Branding Update**: Finalized the unique display name to "Mapper Agent : Architect and Scrum" and internal ID to "atMapper" to definitively clear naming conflicts on the VS Code Marketplace.
+
+---
+
+## [1.1.3] - 2026-04-14
+
+### Bug Fixes
+- **Navigation State Fix**: Resolved the root cause of the "Missing Mermaid view: scrum" error. The extension now correctly updates its internal state when the Scrum Tracker is active, preventing navigation stack corruption.
+
+---
+
 ## [1.1.2] - 2026-04-14
 
 ### Bug Fixes
