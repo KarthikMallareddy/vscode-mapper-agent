@@ -2,7 +2,7 @@
   "name": "mapper",
   "displayName": "Mapper Agent",
   "description": "An AI-powered architect and scrum master for your projects.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "KarthikMallareddy",
   "engines": {
     "vscode": "^1.80.0"
