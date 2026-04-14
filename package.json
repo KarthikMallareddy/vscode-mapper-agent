@@ -4,6 +4,10 @@
   "description": "An AI-powered architect and scrum master for your projects.",
   "version": "1.1.1",
   "publisher": "KarthikMallareddy",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KarthikMallareddy/vscode-mapper-agent"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
