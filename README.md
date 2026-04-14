@@ -70,12 +70,25 @@ Automatically generate an ARCHITECTURE.md file charting your entire project's mo
 
 ## Configuration
 
-Mapper requires a **personal Gemini API Key** to power its AI features. Here is everything you need to know before getting started:
+Mapper uses a transparent two-tier AI system for its Scrum completion engine. You always know which model is active — it is shown in your VS Code status bar every time a sync runs.
 
-- **It is completely free.** Mapper is fully functional on Google's free Gemini API tier. No credit card, no billing plan, no subscription required. Simply create a key at [Google AI Studio](https://aistudio.google.com/app/apikey) and paste it in when prompted.
-- **You are prompted on first use.** The first time you run any Mapper command, a secure input box will appear at the top of VS Code asking for your key. You only ever need to enter it once.
-- **Your key is stored in VS Code's Secret Storage.** This is an OS-level encrypted keychain (the same mechanism VS Code uses for GitHub and Azure credentials). Your key is never written to any file in your workspace, never logged to the output panel, and never sent anywhere other than the official Gemini API endpoint.
-- **To reset or change your key**, open the Command Palette (`Ctrl+Shift+P`) and run `Mapper: Reset Gemini API Key`.
+### Tier 1 — GitHub Copilot (GPT-4o): Zero Cost
+If you have GitHub Copilot installed, Mapper will automatically use **GPT-4o** for all Scrum mapping. GPT-4o is classified as a "base model" under Copilot and consumes **zero Copilot credits** — it is completely free regardless of your Copilot plan tier. You do not need a Gemini key at all if Copilot is available.
+
+When this mode is active, your status bar will show: `Mapper Scrum: Using GitHub Copilot (GPT-4o) — 0 credits used`
+
+> **Note:** Mapper will only ever use GPT-4o from Copilot. It will never silently fall back to another Copilot model (like Claude or o1) that may consume credits. This is intentional to protect you from unexpected charges.
+
+### Tier 2 — Gemini API (Free Key): No Copilot Required
+If GitHub Copilot is not installed or GPT-4o is unavailable, Mapper falls back to Google's Gemini API. This requires a **personal API key**, which is completely free:
+- Get your key at [Google AI Studio](https://aistudio.google.com/app/apikey) — no credit card required.
+- Mapper runs entirely on Google's **free Gemini tier**. No billing plan is needed.
+- The first time you run a command without Copilot, a secure input box will appear asking for your key. You only enter it once.
+- Your key is stored in VS Code's **OS-level Secret Storage** vault — the same encrypted keychain that stores your GitHub tokens. It is never written to any file in your workspace.
+
+When this mode is active, your status bar will show: `Mapper Scrum: Copilot GPT-4o not found, falling back to Gemini API`
+
+To reset or update your Gemini key at any time, open the Command Palette (`Ctrl+Shift+P`) and run `Mapper: Reset Gemini API Key`.
 
 ## Privacy Model
 

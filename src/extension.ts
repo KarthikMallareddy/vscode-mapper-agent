@@ -51,11 +51,16 @@ export async function detectScrumCompletions(rootPath: string) {
     });
 
     try {
-        let models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
-        if (!models || models.length === 0) {
-            models = await vscode.lm.selectChatModels({}); // Fallback to any available installed AI model
+        // Strictly use GPT-4o only — it consumes zero Copilot credits and is completely free for Copilot subscribers.
+        // We do NOT fall back to any other Copilot model to avoid accidentally using a paid/credit-consuming model.
+        const gpt4oModels = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
+        const model = (gpt4oModels && gpt4oModels.length > 0) ? gpt4oModels[0] : undefined;
+
+        if (model) {
+            vscode.window.setStatusBarMessage(`$(sparkle) Mapper Scrum: Using GitHub Copilot (GPT-4o) — 0 credits used`, 5000);
+        } else {
+            vscode.window.setStatusBarMessage(`$(key) Mapper Scrum: Copilot GPT-4o not found, falling back to Gemini API`, 5000);
         }
-        let model = (models && models.length > 0) ? models[0] : undefined;
 
     const prompt = `You are a Scrum AI that maps recent Git Commits to Open Project Goals.
 - If a commit seems reasonably likely to resolve a goal based on the text, map it!
@@ -73,7 +78,7 @@ If absolutely zero commits match, return []. Do not add any markdown formatting 
                 const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, new vscode.CancellationTokenSource().token);
                 for await (const chunk of response.text) responseText += chunk;
             } catch (e) {
-                console.error("Local model request failed", e);
+                console.error("GPT-4o request failed, will try Gemini.", e);
             }
         }
 
