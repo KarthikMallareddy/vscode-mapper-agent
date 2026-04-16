@@ -2,8 +2,19 @@
   "name": "atMapper",
   "displayName": "Mapper Agent : Architect and Scrum",
   "description": "An AI-powered architect and scrum master for your projects.",
-  "version": "1.1.0",
+  "icon": "icon.png",
+  "version": "1.2.0",
   "publisher": "KarthikMallareddy",
+  "keywords": [
+    "mapper",
+    "json",
+    "transform",
+    "api",
+    "architecture",
+    "visualization",
+    "scrum",
+    "project-management"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/KarthikMallareddy/vscode-mapper-agent"
@@ -13,14 +24,18 @@
   },
   "categories": [
     "AI",
+    "Visualization",
+    "Chat",
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onChatParticipant:mapper"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "chatParticipants": [
       {
-        "id": "atMapper",
+        "id": "mapper",
         "name": "mapper",
         "description": "Your project's architect and scrum master.",
         "commands": [

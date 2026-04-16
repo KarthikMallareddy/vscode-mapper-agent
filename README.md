@@ -10,19 +10,31 @@ Mapper is a Visual Studio Code extension designed to bring order to code chaos. 
 ### Live Architecture Visualization
 Never get lost in a sprawling codebase again. Mapper deeply scans your files, categorizes your technical stack (Frontend, Backend, Database), and visualizes the relationships between your modules in a beautiful, zoomable, interactive Mermaid diagram directly in a Webview panel.
 
-![Architecture Overview Map](images/architecture_map.png)
+**Transform your codebase into an interactive visual map** — Mapper uses AST parsing and semantic analysis to automatically detect your project's architecture from JSON, API endpoints, and module dependencies.
 
+#### Architecture Overview Example
+![Architecture Overview Map](images/architecture_map.png)
+*Complete system architecture showing frontend modules, backend services, REST/HTTP connections, databases, and routing—perfect for understanding how all components interact and API service mapping.*
+
+#### Detailed Subsystems View
 ![Detailed Subsystems View](images/subsystems_view.png)
+*Drill down into Feature Subsystems to visualize method implementations, API transformations, and individual service methods with their dependencies and data flows.*
 
 ### AI Auto-Mapped Scrum Tracker
-Project management natively inside your IDE. Create goals, assign them to team members, and keep track of your ticket types (Bug, Story, Task). 
+Project management natively inside your IDE. Create goals, assign them to team members, and keep track of your ticket types (Bug, Story, Task). Powered by intelligent API mapping and JSON-based state management.
+
 **Zero-Friction Completion**: The proprietary AI Sync engine automatically scans your local git commit history. When it detects a commit that resolves a goal, it instantly maps the commit hash and moves the ticket to the "Completed" column.
 
+**Scrum Integration Benefits**:
+- **Smart Chat Integration**: Ask @mapper about task status, roadblocks, and team progress directly in VS Code Chat
+- **Automatic Sprint Tracking**: Transform your git history into sprint metrics and velocity reports
+- **Team Collaboration**: Visualize who owns what across your architecture
+
 ### Contextual File Explanation
-Beam any source file directly into your Copilot Chat. Mapper will analyze the file's role within your dependency tree and explain how it connects to the broader architecture.
+Beam any source file directly into your Copilot Chat or VS Code Chat. Mapper will analyze the file's role within your dependency tree and explain how it connects to the broader architecture. Perfect for API documentation transformation and JSON schema mapping.
 
 ### Markdown Exporting
-Automatically generate an ARCHITECTURE.md file charting your entire project's module imports and symbols hierarchy, perfect for onboarding new developers.
+Automatically generate an ARCHITECTURE.md file charting your entire project's module imports and symbols hierarchy. Transform your API routes, JSON schemas, and service relationships into exportable documentation—perfect for onboarding new developers and sharing architecture decisions with your team.
 
 ## Quick Start
 
