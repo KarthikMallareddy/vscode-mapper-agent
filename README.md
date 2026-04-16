@@ -1,8 +1,6 @@
 # Mapper
 *The AI-powered architect and scrum master for your projects.*
 
-![Mapper Agent Showcase](images/showcase.png)
-
 Mapper is a Visual Studio Code extension designed to bring order to code chaos. By deeply analyzing your codebase via AST parsing and module resolution, and integrating directly with Google's Gemini 1.5 Pro AI, Mapper provides live, zoomable architecture visualizations and zero-friction project management using your local Git history.
 
 ## Features
@@ -12,23 +10,32 @@ Never get lost in a sprawling codebase again. Mapper deeply scans your files, ca
 
 **Transform your codebase into an interactive visual map** — Mapper uses AST parsing and semantic analysis to automatically detect your project's architecture from JSON, API endpoints, and module dependencies.
 
+**Key Capabilities:**
+- **Live Interactive Diagrams**: Generates beautiful, zoomable, interactive maps using Mermaid.js directly inside a VS Code Webview panel.
+- **Stack Categorization**: Intelligently categorizes code modules into their respective technical domains, distinguishing automatically between Frontend, Backend services, and Database layers.
+- **Seamless Editor Integration**: The visual map acts as a navigation tool. Click on any node inside the diagram to instantly open and jump to that specific file in your VS Code editor.
+- **Offline-First Privacy**: All architecture scans are cached locally. Mapper analyzes only module names and import paths—your raw, proprietary business logic never leaves your machine.
+
 #### Architecture Overview Example
 ![Architecture Overview Map](images/architecture_map.png)
 *Complete system architecture showing frontend modules, backend services, REST/HTTP connections, databases, and routing—perfect for understanding how all components interact and API service mapping.*
 
 #### Detailed Subsystems View
 ![Detailed Subsystems View](images/subsystems_view.png)
-*Drill down into Feature Subsystems to visualize method implementations, API transformations, and individual service methods with their dependencies and data flows.*
+*Drill down into Feature Subsystems to visualize method implementations, API transformations, and individual service dependencies and data flows.*
 
 ### AI Auto-Mapped Scrum Tracker
-Project management natively inside your IDE. Create goals, assign them to team members, and keep track of your ticket types (Bug, Story, Task). Powered by intelligent API mapping and JSON-based state management.
+Project management natively inside your IDE, removing the friction of context-switching between your code and your browser. Create goals, assign them to team members, and keep track of your ticket types (Bug, Story, Task) via a local `scrum.json` file. 
 
-**Zero-Friction Completion**: The proprietary AI Sync engine automatically scans your local git commit history. When it detects a commit that resolves a goal, it instantly maps the commit hash and moves the ticket to the "Completed" column.
+**Key Capabilities:**
+- **Zero-Friction AI Completion (Auto-Sync)**: The proprietary AI Sync engine automatically scans your local git commit history. When you push or commit code, the AI detects which commit resolves which goal, instantly maps the commit hash, and moves the ticket to the "Completed" column.
+- **Smart Chat Integration**: Ask `@mapper` about task status, roadblocks, and team progress directly in VS Code Chat.
+- **Automatic Sprint Tracking & Ownership**: Transform your git history into sprint metrics, tracking velocity and visualizing who owns specific parts of your architecture.
+- **Flexible AI Tiers**: Utilizes GitHub Copilot's base model (GPT-4o) for zero-cost operation to parse Git logs. If Copilot is not installed, it falls back seamlessly to a free Google Gemini API integration.
 
-**Scrum Integration Benefits**:
-- **Smart Chat Integration**: Ask @mapper about task status, roadblocks, and team progress directly in VS Code Chat
-- **Automatic Sprint Tracking**: Transform your git history into sprint metrics and velocity reports
-- **Team Collaboration**: Visualize who owns what across your architecture
+#### Tracker Showcase
+![Mapper Agent Showcase](images/showcase.png)
+*The Mapper showcase demonstrating IDE-native integration, where the agent bridges the gap between active code changes and project task management.*
 
 ### Contextual File Explanation
 Beam any source file directly into your Copilot Chat or VS Code Chat. Mapper will analyze the file's role within your dependency tree and explain how it connects to the broader architecture. Perfect for API documentation transformation and JSON schema mapping.
